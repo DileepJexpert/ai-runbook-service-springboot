@@ -134,10 +134,48 @@ public class RunbookJobService {
       job.analyzedCommit = !extractedCommit.isBlank() ? extractedCommit : checkout.commitSha();
 
       transition(job, RunbookJobState.VALIDATING);
-      List<String> errors = validationErrors(data, ev);
+      ValidationResult schemaResult = schema.validate(data, ev);
+      ValidationResult safetyResult = safety.validate(data);
+      ValidationResult evidenceResult = evidence.validate(ev);
+
+      // Perform controlled schema-repair retry if initial schema validation failed (and safety policy was not violated)
+      if (!schemaResult.valid() && safetyResult.valid() && input == null) {
+        log.warn("jobId={} serviceId={} schemaRepairAttempt=1 validationErrorCount={}", job.id, job.serviceId, schemaResult.errors().size());
+        String repairPrompt = buildSchemaRepairPrompt(schemaResult.errors(), prompt.prompt());
+        var repairRequest = new IdfcCoderRequest(
+            checkout.path(),
+            root.resolve("extraction"),
+            repairPrompt,
+            prompt.context(),
+            null, null, null,
+            checkout.mode(),
+            checkout.url(),
+            checkout.branch(),
+            checkout.commitSha()
+        );
+        var repairResult = agent.execute(repairRequest);
+        artifacts.write(root, "extraction/idfc-coder-repair.stdout.log", repairResult.stdout());
+        artifacts.write(root, "extraction/idfc-coder-repair.stderr.log", repairResult.stderr());
+
+        data = mapper.readTree(artifacts.read(root, "extraction/runbook-data.json"));
+        ev = mapper.readTree(artifacts.read(root, "extraction/runbook-evidence.json"));
+
+        schemaResult = schema.validate(data, ev);
+        safetyResult = safety.validate(data);
+        evidenceResult = evidence.validate(ev);
+      }
+
+      List<String> errors = new ArrayList<>();
+      errors.addAll(schemaResult.errors());
+      errors.addAll(safetyResult.errors());
+      errors.addAll(evidenceResult.errors());
+
       QualityGateDecision gate = quality.evaluate(data, errors);
       artifacts.write(root, "validation/validation-report.json", mapper.writeValueAsString(Map.of("valid", errors.isEmpty(), "errors", errors, "qualityGate", gate.outcome())));
-      if (!errors.isEmpty()) throw new IllegalArgumentException("RUNBOOK_SCHEMA_INVALID: " + String.join(",", errors));
+      if (!errors.isEmpty()) {
+        String primaryCode = !schemaResult.valid() ? "RUNBOOK_SCHEMA_INVALID" : (!safetyResult.valid() ? "SAFETY_POLICY_VIOLATION" : "RUNBOOK_SCHEMA_INVALID");
+        throw new IllegalArgumentException(primaryCode + ": " + String.join(",", errors));
+      }
 
       transition(job, RunbookJobState.NORMALIZING);
       JsonNode normalized = normalizer.normalize(data);
@@ -172,12 +210,29 @@ public class RunbookJobService {
     }
   }
 
-  private List<String> validationErrors(JsonNode data, JsonNode ev) {
-    List<String> errors = new ArrayList<>();
-    for (ValidationResult value : List.of(schema.validate(data, ev), safety.validate(data), evidence.validate(ev))) {
-      errors.addAll(value.errors());
+  private String buildSchemaRepairPrompt(List<String> validationErrors, String basePrompt) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("SCHEMA REPAIR REQUEST (Attempt 1 of 1)\n\n");
+    sb.append("Your previous extraction output failed deterministic JSON schema validation with the following errors:\n");
+    for (String err : validationErrors) {
+      sb.append("- ").append(err).append("\n");
     }
-    return errors;
+    sb.append("\nCRITICAL REPAIR INSTRUCTIONS:\n");
+    sb.append("1. Regenerate ONLY the three JSON files in the assigned output directory: `runbook-data.json`, `runbook-evidence.json`, and `security-findings.json`.\n");
+    sb.append("2. Strictly adhere to contractVersion \"2.1\" and schemaVersion \"2.1\".\n");
+    sb.append("3. In `runbook-data.json`:\n");
+    sb.append("   - Place service name inside `\"service\": {\"name\": \"...\", \"businessPurpose\": \"...\", \"criticality\": \"HIGH\", \"supportOwner\": \"...\", \"businessOwner\": \"...\", \"escalationChannel\": \"...\"}` (DO NOT use root `serviceName`).\n");
+    sb.append("   - Place scan status inside `\"generator\": {\"promptVersion\": \"2.1\", \"platformContextVersion\": \"2.1\", \"scanStatus\": \"COMPLETE\"|\"PARTIAL\", \"unscannedAreas\": []}` (DO NOT use root `scanStatus`).\n");
+    sb.append("   - Ensure `\"schemaVersion\": \"2.1\"` is present at the root level.\n");
+    sb.append("4. In `runbook-evidence.json`:\n");
+    sb.append("   - Root level MUST ONLY contain `\"schemaVersion\": \"2.1\"` and `\"facts\": [...]`.\n");
+    sb.append("   - DO NOT include root `contractVersion`, `serviceName`, or `scanStatus` in `runbook-evidence.json`.\n");
+    sb.append("5. In `security-findings.json`:\n");
+    sb.append("   - Root level MUST ONLY contain `\"contractVersion\": \"2.1\"` and `\"findings\": [...]` (empty `[]` if no findings).\n");
+    sb.append("6. Do NOT modify repository source files, do NOT generate Markdown/HTML, and keep all support guidance strictly READ-ONLY.\n\n");
+    sb.append("AUTHORITATIVE CONTRACT AND SPECIFICATIONS:\n");
+    sb.append(basePrompt);
+    return sb.toString();
   }
 
   private JsonNode json(String value) {

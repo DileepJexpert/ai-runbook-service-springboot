@@ -448,6 +448,101 @@ class RunbookCoreTest {
     assertThat(builder.evidencePolicy()).contains("Evidence Policy 2.1");
     assertThat(builder.qualityExpectations()).contains("Extraction quality expectations 2.1");
     assertThat(builder.regulatoryEvidencePolicy()).contains("Regulatory evidence policy 2.1");
+
+    // Explicit skeletons and canonical structure rules in active prompt
+    assertThat(assembledPrompt).contains("\"contractVersion\": \"2.1\"", "\"schemaVersion\": \"2.1\"");
+    assertThat(assembledPrompt).contains("\"generator\"", "\"scanStatus\": \"COMPLETE\"");
+    assertThat(assembledPrompt).contains("\"service\":", "\"name\":");
+    assertThat(assembledPrompt).contains("DO NOT place \"serviceName\" at the root level");
+    assertThat(assembledPrompt).contains("DO NOT place \"scanStatus\" at the root level");
+    assertThat(assembledPrompt).contains("DO NOT add \"contractVersion\", \"serviceName\", or \"scanStatus\" at the root of `runbook-evidence.json`");
+  }
+
+  @Test
+  void canonical_sample_artifacts_validate_against_schemas() throws Exception {
+    RunbookSchemaValidator schemaValidator = new RunbookSchemaValidator();
+    ObjectMapper om = new ObjectMapper();
+
+    JsonNode validData = om.readTree("""
+        {
+          "contractVersion": "2.1",
+          "schemaVersion": "2.1",
+          "generator": {
+            "promptVersion": "2.1",
+            "platformContextVersion": "2.1",
+            "scanStatus": "COMPLETE",
+            "unscannedAreas": []
+          },
+          "pipeline": {
+            "serviceName": "payments-integration-services",
+            "gitCommitSha": "6ed4594439c50e6943e5dff52fc53ac41dbc68c5"
+          },
+          "service": {
+            "name": "payments-integration-services",
+            "businessPurpose": "Processes payments",
+            "criticality": "HIGH",
+            "supportOwner": "Payments Team",
+            "businessOwner": "Retail Banking",
+            "escalationChannel": "#payments-support"
+          },
+          "processingSummary": {
+            "summary": "Handles payment processing."
+          }
+        }
+        """);
+
+    JsonNode validEvidence = om.readTree("""
+        {
+          "schemaVersion": "2.1",
+          "facts": [
+            {
+              "factId": "SVC:NAME",
+              "factType": "SERVICE",
+              "fact": "Service identity is payments-integration-services",
+              "provenance": "CODE",
+              "confidence": "HIGH",
+              "sourceEvidence": [
+                {
+                  "file": "pom.xml",
+                  "lineStart": 4,
+                  "lineEnd": 4
+                }
+              ]
+            }
+          ]
+        }
+        """);
+
+    ValidationResult result = schemaValidator.validate(validData, validEvidence);
+    assertThat(result.valid()).isTrue();
+    assertThat(result.errors()).isEmpty();
+  }
+
+  @Test
+  void invalid_flat_serviceName_and_missing_schemaVersion_fail_validation() throws Exception {
+    RunbookSchemaValidator schemaValidator = new RunbookSchemaValidator();
+    ObjectMapper om = new ObjectMapper();
+
+    // AI output with flat serviceName, root scanStatus, and missing schemaVersion
+    JsonNode invalidData = om.readTree("""
+        {
+          "contractVersion": "2.1",
+          "serviceName": "payments-integration-services",
+          "scanStatus": "COMPLETE"
+        }
+        """);
+
+    JsonNode invalidEvidence = om.readTree("""
+        {
+          "contractVersion": "2.1",
+          "serviceName": "payments-integration-services",
+          "scanStatus": "COMPLETE"
+        }
+        """);
+
+    ValidationResult result = schemaValidator.validate(invalidData, invalidEvidence);
+    assertThat(result.valid()).isFalse();
+    assertThat(result.errors()).contains("unsupported schemaVersion", "invalid scanStatus", "service.name required", "invalid evidence schema");
   }
 
   @Test

@@ -1,12 +1,28 @@
 package com.idfc.ai.runbook;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.idfc.ai.runbook.agent.FakeIdfcCoderExecutor;
+import com.idfc.ai.runbook.agent.IdfcCoderExecutor;
+import com.idfc.ai.runbook.agent.IdfcCoderResult;
+import com.idfc.ai.runbook.agent.RunbookPromptBuilder;
 import com.idfc.ai.runbook.api.dto.CreateJobRequest;
 import com.idfc.ai.runbook.api.dto.PublishRequest;
+import com.idfc.ai.runbook.artifact.BaselineStore;
+import com.idfc.ai.runbook.artifact.RunbookArtifactStore;
+import com.idfc.ai.runbook.config.RunbookProperties;
+import com.idfc.ai.runbook.confluence.ConfluencePublisher;
+import com.idfc.ai.runbook.diff.RunbookComparator;
+import com.idfc.ai.runbook.normalization.RunbookNormalizer;
 import com.idfc.ai.runbook.orchestration.*;
+import com.idfc.ai.runbook.quality.QualityGateService;
+import com.idfc.ai.runbook.rendering.ConfluenceRunbookRenderer;
+import com.idfc.ai.runbook.rendering.MarkdownRunbookRenderer;
+import com.idfc.ai.runbook.rendering.SupplementalArtifactRenderer;
 import com.idfc.ai.runbook.repository.RemoteGitResolver;
-import java.io.*;
-import java.nio.file.*;
+import com.idfc.ai.runbook.repository.RepositoryWorkspaceProvider;
+import com.idfc.ai.runbook.validation.RunbookEvidenceValidator;
+import com.idfc.ai.runbook.validation.RunbookSafetyValidator;
+import com.idfc.ai.runbook.validation.RunbookSchemaValidator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -14,8 +30,13 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -25,6 +46,24 @@ import static org.mockito.Mockito.when;
 class RunbookJobIntegrationTest {
   @Autowired RunbookJobService service;
   @MockBean RemoteGitResolver remoteGitResolver;
+
+  @Autowired RunbookJobStore jobs;
+  @Autowired RepositoryWorkspaceProvider workspace;
+  @Autowired RunbookPromptBuilder prompt;
+  @Autowired RunbookArtifactStore artifacts;
+  @Autowired BaselineStore baseline;
+  @Autowired RunbookSchemaValidator schema;
+  @Autowired RunbookSafetyValidator safety;
+  @Autowired RunbookEvidenceValidator evidence;
+  @Autowired RunbookNormalizer normalizer;
+  @Autowired RunbookComparator comparator;
+  @Autowired MarkdownRunbookRenderer markdown;
+  @Autowired ConfluenceRunbookRenderer html;
+  @Autowired SupplementalArtifactRenderer supplemental;
+  @Autowired ConfluencePublisher publisher;
+  @Autowired QualityGateService quality;
+  @Autowired ObjectMapper mapper;
+  @Autowired RunbookProperties properties;
 
   @Test void local_path_mode_generates_and_publishes() throws Exception {
     Files.deleteIfExists(Path.of("target", "test-artifacts", "baselines", "payments-service-TEST.json"));
@@ -67,6 +106,76 @@ class RunbookJobIntegrationTest {
     Path root = Path.of(job.artifacts.get("root"));
     assertThat(root.resolve("render/RUNBOOK.md")).isRegularFile();
     assertThat(root.resolve("render/confluence-body.html")).isRegularFile();
+  }
+
+  @Test
+  void schema_repair_retry_succeeds_on_second_attempt() throws Exception {
+    AtomicInteger callCount = new AtomicInteger(0);
+    IdfcCoderExecutor repairingAgent = request -> {
+      int count = callCount.incrementAndGet();
+      try {
+        Files.createDirectories(request.outputDirectory());
+        if (count == 1) {
+          // 1st attempt: invalid flat serviceName and missing schemaVersion
+          Files.writeString(request.outputDirectory().resolve("runbook-data.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\",\"scanStatus\":\"COMPLETE\"}");
+          Files.writeString(request.outputDirectory().resolve("runbook-evidence.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\",\"scanStatus\":\"COMPLETE\"}");
+        } else {
+          // 2nd attempt (repair): valid schema
+          Files.copy(Path.of("src/test/resources/fixtures/runbook-data.json"), request.outputDirectory().resolve("runbook-data.json"), StandardCopyOption.REPLACE_EXISTING);
+          Files.copy(Path.of("src/test/resources/fixtures/runbook-evidence.json"), request.outputDirectory().resolve("runbook-evidence.json"), StandardCopyOption.REPLACE_EXISTING);
+        }
+        Files.writeString(request.outputDirectory().resolve("security-findings.json"), "{\"contractVersion\":\"2.1\",\"findings\":[]}\n");
+        return new IdfcCoderResult("attempt " + count, "");
+      } catch (IOException e) {
+        throw new IllegalStateException(e);
+      }
+    };
+
+    RunbookJobService retryService = new RunbookJobService(jobs, workspace, repairingAgent, prompt, artifacts, baseline, schema, safety, evidence, normalizer, comparator, markdown, html, supplemental, publisher, quality, mapper, properties);
+
+    String repo = temporaryGitRepository();
+    String sha = git(repo);
+    var request = new CreateJobRequest("repair-test-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+
+    RunbookJob job = retryService.create(request);
+    for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
+
+    assertThat(callCount.get()).isEqualTo(2);
+    assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
+    Path root = Path.of(job.artifacts.get("root"));
+    assertThat(root.resolve("extraction/idfc-coder-repair.stdout.log")).isRegularFile();
+  }
+
+  @Test
+  void schema_repair_retry_fails_when_second_attempt_remains_invalid() throws Exception {
+    AtomicInteger callCount = new AtomicInteger(0);
+    IdfcCoderExecutor failingAgent = request -> {
+      int count = callCount.incrementAndGet();
+      try {
+        Files.createDirectories(request.outputDirectory());
+        // Both attempts produce invalid schema
+        Files.writeString(request.outputDirectory().resolve("runbook-data.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\"}");
+        Files.writeString(request.outputDirectory().resolve("runbook-evidence.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\"}");
+        Files.writeString(request.outputDirectory().resolve("security-findings.json"), "{\"contractVersion\":\"2.1\",\"findings\":[]}\n");
+        return new IdfcCoderResult("attempt " + count, "");
+      } catch (IOException e) {
+        throw new IllegalStateException(e);
+      }
+    };
+
+    RunbookJobService retryService = new RunbookJobService(jobs, workspace, failingAgent, prompt, artifacts, baseline, schema, safety, evidence, normalizer, comparator, markdown, html, supplemental, publisher, quality, mapper, properties);
+
+    String repo = temporaryGitRepository();
+    String sha = git(repo);
+    var request = new CreateJobRequest("failing-repair-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+
+    RunbookJob job = retryService.create(request);
+    for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
+
+    // Exactly 2 attempts (1 initial + 1 repair), no infinite loop
+    assertThat(callCount.get()).isEqualTo(2);
+    assertThat(job.state).isEqualTo(RunbookJobState.FAILED);
+    assertThat(job.failureCode).isEqualTo("RUNBOOK_SCHEMA_INVALID");
   }
 
   private String temporaryGitRepository() throws Exception { Path repo=Files.createTempDirectory("runbook-fixture-repo"); Files.writeString(repo.resolve("README.md"),"fixture"); command(repo,"git","init");command(repo,"git","config","user.email","test@example.invalid");command(repo,"git","config","user.name","Runbook Test");command(repo,"git","add",".");command(repo,"git","commit","-m","fixture");return repo.toString(); }

@@ -6,11 +6,37 @@
 - **Generated Build Directories Excluded**: The extractor must strictly ignore generated/transient build output directories including `**/build/**`, `**/target/**`, `**/out/**`, `**/.gradle/**`, and `**/node_modules/**`. Source citations must point to authoritative files (e.g. `src/main/...`, `src/test/...`, `db/migration/...`, deployment manifests, configuration files).
 - **Scan Completeness vs Fact Confidence**: `scanStatus` must be set to `COMPLETE` only when all relevant operational areas of the repository were inspected; otherwise set `PARTIAL` and list all unscanned areas in `unscannedAreas`. Scan completeness is independent of individual fact confidence (`HIGH`, `MEDIUM`, `LOW`).
 
-## 2. AI Artifact Ownership
+## 2. AI Artifact Ownership and Canonical Schema Structure
 For contract 2.1, the extractor is strictly responsible for generating **exactly three AI-owned JSON artifacts** into the requested output directory:
 1. `runbook-data.json` (canonical structured Service Intelligence facts)
 2. `runbook-evidence.json` (provenance, confidence, and exact file/line source citations)
 3. `security-findings.json` (candidate security findings; must ALWAYS be created, containing `{"contractVersion": "2.1", "findings": []}` when zero findings are detected)
+
+### 2.1. Canonical JSON Artifact Shapes
+
+#### A. `runbook-data.json` Required Properties
+- `contractVersion`: `"2.1"`
+- `schemaVersion`: `"2.1"`
+- `generator`: object containing `promptVersion` ("2.1"), `platformContextVersion` ("2.1"), `scanStatus` (`"COMPLETE"` or `"PARTIAL"`), and `unscannedAreas` (array). **`scanStatus` MUST NOT be placed at the root level.**
+- `pipeline`: object containing `serviceName` and `gitCommitSha`.
+- `service`: object containing `name`, `businessPurpose`, `criticality`, `supportOwner`, `businessOwner`, and `escalationChannel`. **`serviceName` MUST NOT be placed at the root level; use `service.name`.**
+- `processingSummary`: object containing `summary`.
+- Domain collections (arrays): `businessFlows`, `businessRules`, `apis`, `databaseTables`, `downstreamDependencies`, `kafkaConsumers`, `kafkaProducers`, `configuration`, `featureFlags`, `resilience`, `logSignatures`, `traceIdentifiers`, `configuredAlerts`, `supportHealthChecks`, `unknownIncidentContext`, `escalationEvidence`.
+
+#### B. `runbook-evidence.json` Required Properties
+- `schemaVersion`: `"2.1"`
+- `facts`: array of evidence objects, where each object contains:
+  * `factId`: unique string identifier.
+  * `factType`: string category.
+  * `fact`: string describing the fact.
+  * `confidence`: `"HIGH"`, `"MEDIUM"`, or `"LOW"`.
+  * `provenance`: `"CODE"`, `"YAML"`, `"PROPERTIES_FILE"`, `"DATABASE_MIGRATION"`, etc.
+  * `sourceEvidence`: array (minItems 1) of objects with `file` (relative path string), `lineStart` (integer >= 1), `lineEnd` (integer >= 1).
+- **DO NOT include root `contractVersion`, `serviceName`, or `scanStatus` in `runbook-evidence.json`.**
+
+#### C. `security-findings.json` Required Properties
+- `contractVersion`: `"2.1"`
+- `findings`: array of finding objects (or empty `[]` when no findings exist).
 
 The AI extractor must **NOT**:
 - Modify the target repository or any files outside the assigned output directory.

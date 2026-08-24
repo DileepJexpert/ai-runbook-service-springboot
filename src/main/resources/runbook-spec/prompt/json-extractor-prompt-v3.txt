@@ -14,3 +14,149 @@ Writing these three artifacts into the assigned output directory is allowed and 
 All generated Production Support guidance (supportCheck, supportAction, unknownIncidentContext, escalationEvidence) must be strictly READ-ONLY. Do not instruct Support to initiate manual reconciliation, replay Kafka events, alter offsets, mutate database records, force state transitions, force schedulers, or modify configuration. For UNKNOWN/DEEMED outcomes, instruct Support to inspect existing call attempt and reconciliation evidence, not to initiate reconciliation.
 
 Do NOT render documents (Markdown/Confluence HTML), calculate diffs, evaluate quality gates, publish, or disclose raw secret values.
+
+============================================================
+CRITICAL JSON SCHEMA AND SHAPE REQUIREMENTS
+============================================================
+
+The output JSON MUST strictly conform to the following top-level structures and field paths.
+DO NOT invent alternate field names, DO NOT flatten nested objects, and DO NOT omit required properties.
+
+---
+### 1. `runbook-data.json` SKELETON
+---
+Top-level REQUIRED fields:
+- "contractVersion": "2.1"
+- "schemaVersion": "2.1"
+- "generator": object with "promptVersion" ("2.1"), "platformContextVersion" ("2.1"), "scanStatus" ("COMPLETE" or "PARTIAL"), and "unscannedAreas" (array)
+- "pipeline": object with "serviceName" and "gitCommitSha"
+- "service": object with "name", "businessPurpose", "criticality", "supportOwner", "businessOwner", and "escalationChannel"
+- "processingSummary": object with "summary"
+- Arrays: "businessFlows", "businessRules", "apis", "databaseTables", "downstreamDependencies", "kafkaConsumers", "kafkaProducers", "configuration", "featureFlags", "resilience", "logSignatures", "traceIdentifiers", "configuredAlerts", "supportHealthChecks", "unknownIncidentContext", "escalationEvidence"
+
+SCHEMA WARNINGS:
+- DO NOT place "serviceName" at the root level. The service identity MUST be inside `"service": {"name": "..."}`.
+- DO NOT place "scanStatus" at the root level. The scan status MUST be inside `"generator": {"scanStatus": "COMPLETE" | "PARTIAL"}`.
+- DO NOT omit "schemaVersion". It MUST be `"2.1"`.
+
+Exact JSON Skeleton:
+```json
+{
+  "contractVersion": "2.1",
+  "schemaVersion": "2.1",
+  "generator": {
+    "promptVersion": "2.1",
+    "platformContextVersion": "2.1",
+    "scanStatus": "COMPLETE",
+    "unscannedAreas": []
+  },
+  "pipeline": {
+    "serviceName": "<service-name>",
+    "gitCommitSha": "<commit-sha>"
+  },
+  "service": {
+    "name": "<service-name>",
+    "businessPurpose": "<High-level purpose of the service>",
+    "criticality": "HIGH",
+    "supportOwner": "<Team/Owner>",
+    "businessOwner": "<Team/Owner>",
+    "escalationChannel": "#<channel>"
+  },
+  "processingSummary": {
+    "summary": "<Processing summary description>"
+  },
+  "businessFlows": [],
+  "businessRules": [],
+  "apis": [],
+  "databaseTables": [],
+  "downstreamDependencies": [],
+  "kafkaConsumers": [],
+  "kafkaProducers": [],
+  "configuration": [],
+  "featureFlags": [],
+  "resilience": [],
+  "logSignatures": [],
+  "traceIdentifiers": [],
+  "configuredAlerts": [],
+  "supportHealthChecks": [],
+  "unknownIncidentContext": [],
+  "escalationEvidence": []
+}
+```
+
+---
+### 2. `runbook-evidence.json` SKELETON
+---
+Top-level REQUIRED fields:
+- "schemaVersion": "2.1"
+- "facts": array of evidence fact objects
+
+SCHEMA WARNINGS:
+- The top-level properties of `runbook-evidence.json` MUST ONLY be `"schemaVersion"` and `"facts"`.
+- DO NOT add "contractVersion", "serviceName", or "scanStatus" at the root of `runbook-evidence.json`.
+- Every item in "facts" must contain:
+  * "factId": string (e.g. "SVC:NAME", "API:POST:/v1/payments", "CONFIG:spring.datasource.url")
+  * "factType": string (e.g. "SERVICE", "API", "BUSINESS_RULE", "DATABASE", "DOWNSTREAM_DEPENDENCY", "CONFIGURATION")
+  * "fact": string describing the fact
+  * "confidence": "HIGH" | "MEDIUM" | "LOW"
+  * "provenance": "CODE" | "YAML" | "PROPERTIES_FILE" | "ANNOTATION" | "DATABASE_MIGRATION" | "UNKNOWN"
+  * "sourceEvidence": array of at least 1 object with "file" (relative path string), "lineStart" (integer >= 1), and "lineEnd" (integer >= 1)
+
+Exact JSON Skeleton:
+```json
+{
+  "schemaVersion": "2.1",
+  "facts": [
+    {
+      "factId": "SVC:NAME",
+      "factType": "SERVICE",
+      "fact": "Service identity is <service-name>",
+      "provenance": "CODE",
+      "confidence": "HIGH",
+      "sourceEvidence": [
+        {
+          "file": "pom.xml",
+          "lineStart": 4,
+          "lineEnd": 4
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+### 3. `security-findings.json` SKELETON
+---
+Top-level REQUIRED fields:
+- "contractVersion": "2.1"
+- "findings": array of security finding objects
+
+Exact JSON Skeleton (when zero findings):
+```json
+{
+  "contractVersion": "2.1",
+  "findings": []
+}
+```
+
+Exact JSON Skeleton (when findings detected):
+```json
+{
+  "contractVersion": "2.1",
+  "findings": [
+    {
+      "id": "SEC-01",
+      "type": "POTENTIAL_HARDCODED_SECRET",
+      "confidence": "MEDIUM",
+      "sourceEvidence": [
+        {
+          "file": "src/main/resources/application.yml",
+          "lineStart": 10,
+          "lineEnd": 10
+        }
+      ]
+    }
+  ]
+}
+```
