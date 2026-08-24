@@ -3,6 +3,7 @@ package com.idfc.ai.runbook;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.idfc.ai.runbook.agent.RunbookPromptBuilder;
+import com.idfc.ai.runbook.api.dto.CreateJobRequest;
 import com.idfc.ai.runbook.config.RunbookProperties;
 import com.idfc.ai.runbook.diff.OperationalDiff;
 import com.idfc.ai.runbook.diff.RunbookComparator;
@@ -13,6 +14,9 @@ import com.idfc.ai.runbook.rendering.ConfluenceRunbookRenderer;
 import com.idfc.ai.runbook.rendering.MarkdownRunbookRenderer;
 import com.idfc.ai.runbook.rendering.RunbookSection;
 import com.idfc.ai.runbook.rendering.SupplementalArtifactRenderer;
+import com.idfc.ai.runbook.repository.LocalRepositoryWorkspaceProvider;
+import com.idfc.ai.runbook.repository.RemoteGitResolver;
+import com.idfc.ai.runbook.repository.RepositoryWorkspace;
 import com.idfc.ai.runbook.validation.RunbookEvidenceValidator;
 import com.idfc.ai.runbook.validation.RunbookSafetyValidator;
 import com.idfc.ai.runbook.validation.RunbookSchemaValidator;
@@ -444,6 +448,54 @@ class RunbookCoreTest {
     assertThat(builder.evidencePolicy()).contains("Evidence Policy 2.1");
     assertThat(builder.qualityExpectations()).contains("Extraction quality expectations 2.1");
     assertThat(builder.regulatoryEvidencePolicy()).contains("Regulatory evidence policy 2.1");
+  }
+
+  @Test
+  void bitbucket_repository_request_parsing_and_branch_resolution() {
+    RemoteGitResolver mockResolver = (url, branch) -> {
+      if ("develop".equals(branch)) return "develop-sha-1234567890";
+      if (branch == null || branch.isBlank()) return "main-sha-0987654321";
+      throw new IllegalArgumentException("unknown branch: " + branch);
+    };
+
+    LocalRepositoryWorkspaceProvider provider = new LocalRepositoryWorkspaceProvider(mockResolver);
+
+    // 1. Branch supplied
+    CreateJobRequest.Repository repoWithBranch = new CreateJobRequest.Repository("BITBUCKET", null, "https://bitbucket.bank.local/scm/pay/payments.git", "develop", null);
+    RepositoryWorkspace wsBranch = provider.prepare(repoWithBranch, null);
+    assertThat(wsBranch.mode()).isEqualTo("BITBUCKET");
+    assertThat(wsBranch.commitSha()).isEqualTo("develop-sha-1234567890");
+    assertThat(wsBranch.url()).isEqualTo("https://bitbucket.bank.local/scm/pay/payments.git");
+    assertThat(wsBranch.branch()).isEqualTo("develop");
+
+    // 2. Branch omitted (resolves default remote HEAD)
+    CreateJobRequest.Repository repoNoBranch = new CreateJobRequest.Repository("BITBUCKET", null, "https://bitbucket.bank.local/scm/pay/payments.git", null, null);
+    RepositoryWorkspace wsDefault = provider.prepare(repoNoBranch, null);
+    assertThat(wsDefault.mode()).isEqualTo("BITBUCKET");
+    assertThat(wsDefault.commitSha()).isEqualTo("main-sha-0987654321");
+
+    // 3. Exact commit supplied - takes precedence over remote HEAD
+    CreateJobRequest.Repository repoExact = new CreateJobRequest.Repository("BITBUCKET", null, "https://bitbucket.bank.local/scm/pay/payments.git", "develop", "exact-sha-5555555");
+    RepositoryWorkspace wsExact = provider.prepare(repoExact, "exact-sha-5555555");
+    assertThat(wsExact.commitSha()).isEqualTo("exact-sha-5555555");
+  }
+
+  @Test
+  void bitbucket_repository_validates_required_url_and_unsupported_modes() {
+    RemoteGitResolver mockResolver = (url, branch) -> "dummy-sha";
+    LocalRepositoryWorkspaceProvider provider = new LocalRepositoryWorkspaceProvider(mockResolver);
+
+    // Missing URL in BITBUCKET mode
+    CreateJobRequest.Repository missingUrl = new CreateJobRequest.Repository("BITBUCKET", null, "", null, null);
+    org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> provider.prepare(missingUrl, null));
+
+    // Missing localPath in LOCAL_PATH mode
+    CreateJobRequest.Repository missingPath = new CreateJobRequest.Repository("LOCAL_PATH", "", null, null, null);
+    org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> provider.prepare(missingPath, null));
+
+    // Unsupported mode
+    CreateJobRequest.Repository invalidMode = new CreateJobRequest.Repository("SVN", null, null, null, null);
+    org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> provider.prepare(invalidMode, null));
   }
 
   private void assertMarkdownTableShape(String markdown, String header, int columns) {

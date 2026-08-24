@@ -1,3 +1,47 @@
 package com.idfc.ai.runbook.api.dto;
-import jakarta.validation.Valid; import jakarta.validation.constraints.NotBlank;
-public record CreateJobRequest(@NotBlank String serviceId, @Valid Repository repository, @Valid Deployment deployment, @Valid ExtractionInput extractionInput) { public CreateJobRequest(String serviceId,Repository repository,Deployment deployment){this(serviceId,repository,deployment,null);} public record Repository(@NotBlank String mode,@NotBlank String localPath,String commitSha){} public record Deployment(@NotBlank String environment,String applicationVersion,String imageTag,String buildNumber,String namespace,String deploymentName){} public record ExtractionInput(@NotBlank String mode,@NotBlank String dataPath,@NotBlank String evidencePath,String securityFindingsPath){} }
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+
+public record CreateJobRequest(
+    @NotBlank String serviceId,
+    @Valid Repository repository,
+    @Valid Deployment deployment,
+    @Valid ExtractionInput extractionInput
+) {
+  public CreateJobRequest(String serviceId, Repository repository, Deployment deployment) {
+    this(serviceId, repository, deployment, null);
+  }
+
+  public record Repository(
+      @NotBlank String mode,
+      String localPath,
+      String url,
+      String branch,
+      String commitSha
+  ) {
+    public Repository(String mode, String localPath, String commitSha) {
+      this(mode, localPath, null, null, commitSha);
+    }
+  }
+
+  public record Deployment(
+      @NotBlank String environment,
+      String applicationVersion,
+      String imageTag,
+      String buildNumber,
+      String namespace,
+      String deploymentName
+  ) {
+    public Deployment(String environment) {
+      this(environment, null, null, null, null, null);
+    }
+  }
+
+  public record ExtractionInput(
+      @NotBlank String mode,
+      @NotBlank String dataPath,
+      @NotBlank String evidencePath,
+      String securityFindingsPath
+  ) {}
+}
