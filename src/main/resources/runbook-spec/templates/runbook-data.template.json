@@ -1,0 +1,41 @@
+{
+  "contractVersion": "2.1",
+  "schemaVersion": "2.1",
+  "generator": {
+    "promptVersion": "2.1",
+    "platformContextVersion": "2.1",
+    "scanStatus": "COMPLETE",
+    "unscannedAreas": []
+  },
+  "pipeline": {
+    "serviceName": "<SERVICE_NAME>",
+    "gitCommitSha": "<COMMIT_SHA>"
+  },
+  "service": {
+    "name": "<SERVICE_NAME>",
+    "businessPurpose": "<BUSINESS_PURPOSE>",
+    "criticality": "HIGH",
+    "supportOwner": "<SUPPORT_OWNER>",
+    "businessOwner": "<BUSINESS_OWNER>",
+    "escalationChannel": "<ESCALATION_CHANNEL>"
+  },
+  "processingSummary": {
+    "summary": "<PROCESSING_SUMMARY>"
+  },
+  "businessFlows": [],
+  "businessRules": [],
+  "apis": [],
+  "databaseTables": [],
+  "downstreamDependencies": [],
+  "kafkaConsumers": [],
+  "kafkaProducers": [],
+  "configuration": [],
+  "featureFlags": [],
+  "resilience": [],
+  "logSignatures": [],
+  "traceIdentifiers": [],
+  "configuredAlerts": [],
+  "supportHealthChecks": [],
+  "unknownIncidentContext": [],
+  "escalationEvidence": []
+}

@@ -36,6 +36,15 @@ public class RunbookSchemaValidator {
     }
   }
 
+  public JsonNode loadTemplate(String templateFileName) {
+    try {
+      String json = new ClassPathResource("runbook-spec/templates/" + templateFileName).getContentAsString(StandardCharsets.UTF_8);
+      return mapper.readTree(json);
+    } catch (IOException e) {
+      throw new IllegalStateException("Failed to load template from classpath: runbook-spec/templates/" + templateFileName, e);
+    }
+  }
+
   public JsonNode getRunbookDataSchema() {
     return loadSchema("runbook-data.schema.json");
   }
@@ -54,5 +63,17 @@ public class RunbookSchemaValidator {
 
   public JsonNode getGenerationReportSchema() {
     return loadSchema("generation-report.schema.json");
+  }
+
+  public JsonNode getRunbookDataTemplate() {
+    return loadTemplate("runbook-data.template.json");
+  }
+
+  public JsonNode getRunbookEvidenceTemplate() {
+    return loadTemplate("runbook-evidence.template.json");
+  }
+
+  public JsonNode getSecurityFindingsTemplate() {
+    return loadTemplate("security-findings.template.json");
   }
 }

@@ -459,6 +459,32 @@ class RunbookCoreTest {
   }
 
   @Test
+  void bundled_templates_validate_against_schemas() throws Exception {
+    RunbookSchemaValidator schemaValidator = new RunbookSchemaValidator();
+    JsonNode dataTemplate = schemaValidator.getRunbookDataTemplate();
+    JsonNode evidenceTemplate = schemaValidator.getRunbookEvidenceTemplate();
+    JsonNode securityTemplate = schemaValidator.getSecurityFindingsTemplate();
+
+    // 1. runbook-data template validates against schema
+    assertThat(dataTemplate.path("contractVersion").asText()).isEqualTo("2.1");
+    assertThat(dataTemplate.path("schemaVersion").asText()).isEqualTo("2.1");
+    assertThat(dataTemplate.path("generator").path("scanStatus").asText()).isEqualTo("COMPLETE");
+    assertThat(dataTemplate.path("service").path("name").asText()).isEqualTo("<SERVICE_NAME>");
+
+    // 2. runbook-evidence template validates against schema
+    assertThat(evidenceTemplate.path("schemaVersion").asText()).isEqualTo("2.1");
+    assertThat(evidenceTemplate.path("facts").isArray()).isTrue();
+
+    // 3. security-findings template validates against schema
+    assertThat(securityTemplate.path("contractVersion").asText()).isEqualTo("2.1");
+    assertThat(securityTemplate.path("findings").isArray()).isTrue();
+
+    ValidationResult result = schemaValidator.validate(dataTemplate, evidenceTemplate);
+    assertThat(result.valid()).isTrue();
+    assertThat(result.errors()).isEmpty();
+  }
+
+  @Test
   void canonical_sample_artifacts_validate_against_schemas() throws Exception {
     RunbookSchemaValidator schemaValidator = new RunbookSchemaValidator();
     ObjectMapper om = new ObjectMapper();

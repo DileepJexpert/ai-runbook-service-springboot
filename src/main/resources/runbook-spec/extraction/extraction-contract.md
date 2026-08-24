@@ -38,6 +38,9 @@ For contract 2.1, the extractor is strictly responsible for generating **exactly
 - `contractVersion`: `"2.1"`
 - `findings`: array of finding objects (or empty `[]` when no findings exist).
 
+### 2.2. Template-First Extraction Model
+Java owns the canonical schema structure and initializes every fresh extraction with schema-valid template files (`runbook-data.template.json`, `runbook-evidence.template.json`, `security-findings.template.json`) in the assigned output directory. The AI extractor analyzes the repository fresh from scratch and populates these existing files in place. The structural properties (field names, nesting, versions) are immutable; AI owns only the repository facts populated into that structure.
+
 The AI extractor must **NOT**:
 - Modify the target repository or any files outside the assigned output directory.
 - Render Markdown (`RUNBOOK.md`) or Confluence HTML (`confluence-body.html`).

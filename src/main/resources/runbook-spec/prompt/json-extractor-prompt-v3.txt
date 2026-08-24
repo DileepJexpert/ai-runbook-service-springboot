@@ -1,26 +1,36 @@
-Service Intelligence extraction prompt 2.1
+Service Intelligence extraction prompt 2.1 (Template-First Extraction Model)
 
 Read the supplied extraction contract, platform context, configuration extraction policy, evidence policy, safety policy, quality expectations, and regulatory evidence policy.
 
 Analyze the TARGET REPOSITORY in a strictly read-only manner. Do NOT modify any files in the target repository.
 
-Generate and write EXACTLY the three AI-owned JSON artifacts into the requested output directory:
+============================================================
+CANONICAL EXTRACTION FILES & TEMPLATE-FIRST MODEL
+============================================================
+
+Three canonical schema-valid template files ALREADY EXIST in the assigned output directory:
 1. `runbook-data.json`
 2. `runbook-evidence.json`
-3. `security-findings.json` (ALWAYS generate this artifact; if no findings exist, write a valid JSON object containing an empty findings array: {"contractVersion": "2.1", "findings": []})
+3. `security-findings.json`
 
-Writing these three artifacts into the assigned output directory is allowed and required.
+Your task is to analyze the repository fresh and POPULATE THESE EXISTING FILES with authoritative facts.
 
-All generated Production Support guidance (supportCheck, supportAction, unknownIncidentContext, escalationEvidence) must be strictly READ-ONLY. Do not instruct Support to initiate manual reconciliation, replay Kafka events, alter offsets, mutate database records, force state transitions, force schedulers, or modify configuration. For UNKNOWN/DEEMED outcomes, instruct Support to inspect existing call attempt and reconciliation evidence, not to initiate reconciliation.
+AI DECIDES: WHAT facts exist in the repository.
+JAVA OWNS: WHERE facts are stored (canonical schema structure).
 
-Do NOT render documents (Markdown/Confluence HTML), calculate diffs, evaluate quality gates, publish, or disclose raw secret values.
+DO NOT:
+- Invent a new JSON structure or alternative model.
+- Rename properties (e.g. do NOT rename `service.name` to `serviceName`).
+- Flatten nested objects (e.g. do NOT move `service.name` or `generator.scanStatus` to the root level).
+- Move fields to unauthorized paths.
+- Remove required fields or omit `schemaVersion: "2.1"`.
+- Change `contractVersion` or `schemaVersion` away from `"2.1"`.
+- Create additional AI JSON artifacts.
+- Render Markdown (`RUNBOOK.md`) or HTML (`confluence-body.html`).
 
 ============================================================
-CRITICAL JSON SCHEMA AND SHAPE REQUIREMENTS
+EXACT CANONICAL ARTIFACT SCHEMAS & SKELETONS
 ============================================================
-
-The output JSON MUST strictly conform to the following top-level structures and field paths.
-DO NOT invent alternate field names, DO NOT flatten nested objects, and DO NOT omit required properties.
 
 ---
 ### 1. `runbook-data.json` SKELETON
@@ -160,3 +170,9 @@ Exact JSON Skeleton (when findings detected):
   ]
 }
 ```
+
+============================================================
+PRODUCTION SUPPORT SAFETY RULES
+============================================================
+
+All generated Production Support guidance (supportCheck, supportAction, unknownIncidentContext, escalationEvidence) must be strictly READ-ONLY. Do not instruct Support to initiate manual reconciliation, replay Kafka events, alter offsets, mutate database records, force state transitions, force schedulers, or modify configuration. For UNKNOWN/DEEMED outcomes, instruct Support to inspect existing call attempt and reconciliation evidence, not to initiate reconciliation.

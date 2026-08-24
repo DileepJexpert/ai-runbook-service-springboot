@@ -1,5 +1,6 @@
 package com.idfc.ai.runbook;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.idfc.ai.runbook.agent.FakeIdfcCoderExecutor;
 import com.idfc.ai.runbook.agent.IdfcCoderExecutor;
@@ -109,73 +110,104 @@ class RunbookJobIntegrationTest {
   }
 
   @Test
-  void schema_repair_retry_succeeds_on_second_attempt() throws Exception {
+  void template_first_extraction_initializes_fresh_templates_for_new_jobs() throws Exception {
     AtomicInteger callCount = new AtomicInteger(0);
-    IdfcCoderExecutor repairingAgent = request -> {
-      int count = callCount.incrementAndGet();
+    IdfcCoderExecutor templateCheckingAgent = request -> {
+      callCount.incrementAndGet();
       try {
-        Files.createDirectories(request.outputDirectory());
-        if (count == 1) {
-          // 1st attempt: invalid flat serviceName and missing schemaVersion
-          Files.writeString(request.outputDirectory().resolve("runbook-data.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\",\"scanStatus\":\"COMPLETE\"}");
-          Files.writeString(request.outputDirectory().resolve("runbook-evidence.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\",\"scanStatus\":\"COMPLETE\"}");
-        } else {
-          // 2nd attempt (repair): valid schema
-          Files.copy(Path.of("src/test/resources/fixtures/runbook-data.json"), request.outputDirectory().resolve("runbook-data.json"), StandardCopyOption.REPLACE_EXISTING);
-          Files.copy(Path.of("src/test/resources/fixtures/runbook-evidence.json"), request.outputDirectory().resolve("runbook-evidence.json"), StandardCopyOption.REPLACE_EXISTING);
-        }
-        Files.writeString(request.outputDirectory().resolve("security-findings.json"), "{\"contractVersion\":\"2.1\",\"findings\":[]}\n");
-        return new IdfcCoderResult("attempt " + count, "");
+        Path dataFile = request.outputDirectory().resolve("runbook-data.json");
+        Path evidenceFile = request.outputDirectory().resolve("runbook-evidence.json");
+        Path securityFile = request.outputDirectory().resolve("security-findings.json");
+
+        // 4. Fresh job receives all three templates before agent runs
+        assertThat(Files.isRegularFile(dataFile)).isTrue();
+        assertThat(Files.isRegularFile(evidenceFile)).isTrue();
+        assertThat(Files.isRegularFile(securityFile)).isTrue();
+
+        // 6. Templates contain no previous-service facts
+        String initialData = Files.readString(dataFile);
+        assertThat(initialData).contains("<SERVICE_NAME>", "<BUSINESS_PURPOSE>");
+        assertThat(initialData).doesNotContain("payments-integration-services");
+
+        // Populate valid facts into the template
+        Files.copy(Path.of("src/test/resources/fixtures/runbook-data.json"), dataFile, StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(Path.of("src/test/resources/fixtures/runbook-evidence.json"), evidenceFile, StandardCopyOption.REPLACE_EXISTING);
+        return new IdfcCoderResult("template filled", "");
       } catch (IOException e) {
         throw new IllegalStateException(e);
       }
     };
 
-    RunbookJobService retryService = new RunbookJobService(jobs, workspace, repairingAgent, prompt, artifacts, baseline, schema, safety, evidence, normalizer, comparator, markdown, html, supplemental, publisher, quality, mapper, properties);
+    RunbookJobService templateService = new RunbookJobService(jobs, workspace, templateCheckingAgent, prompt, artifacts, baseline, schema, safety, evidence, normalizer, comparator, markdown, html, supplemental, publisher, quality, mapper, properties);
 
     String repo = temporaryGitRepository();
     String sha = git(repo);
-    var request = new CreateJobRequest("repair-test-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+    var request = new CreateJobRequest("template-test-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
 
-    RunbookJob job = retryService.create(request);
+    RunbookJob job = templateService.create(request);
     for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
 
-    assertThat(callCount.get()).isEqualTo(2);
+    // 19. idfc-coder invoked exactly once
+    assertThat(callCount.get()).isEqualTo(1);
     assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
-    Path root = Path.of(job.artifacts.get("root"));
-    assertThat(root.resolve("extraction/idfc-coder-repair.stdout.log")).isRegularFile();
   }
 
   @Test
-  void schema_repair_retry_fails_when_second_attempt_remains_invalid() throws Exception {
+  void invalid_extracted_schema_fails_with_runbook_schema_invalid_in_single_analysis() throws Exception {
     AtomicInteger callCount = new AtomicInteger(0);
     IdfcCoderExecutor failingAgent = request -> {
-      int count = callCount.incrementAndGet();
+      callCount.incrementAndGet();
       try {
-        Files.createDirectories(request.outputDirectory());
-        // Both attempts produce invalid schema
         Files.writeString(request.outputDirectory().resolve("runbook-data.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\"}");
         Files.writeString(request.outputDirectory().resolve("runbook-evidence.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\"}");
         Files.writeString(request.outputDirectory().resolve("security-findings.json"), "{\"contractVersion\":\"2.1\",\"findings\":[]}\n");
-        return new IdfcCoderResult("attempt " + count, "");
+        return new IdfcCoderResult("attempt " + callCount.get(), "");
       } catch (IOException e) {
         throw new IllegalStateException(e);
       }
     };
 
-    RunbookJobService retryService = new RunbookJobService(jobs, workspace, failingAgent, prompt, artifacts, baseline, schema, safety, evidence, normalizer, comparator, markdown, html, supplemental, publisher, quality, mapper, properties);
+    RunbookJobService failingService = new RunbookJobService(jobs, workspace, failingAgent, prompt, artifacts, baseline, schema, safety, evidence, normalizer, comparator, markdown, html, supplemental, publisher, quality, mapper, properties);
 
     String repo = temporaryGitRepository();
     String sha = git(repo);
-    var request = new CreateJobRequest("failing-repair-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+    var request = new CreateJobRequest("single-pass-failing-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
 
-    RunbookJob job = retryService.create(request);
+    RunbookJob job = failingService.create(request);
     for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
 
-    // Exactly 2 attempts (1 initial + 1 repair), no infinite loop
-    assertThat(callCount.get()).isEqualTo(2);
+    // Exactly 1 analysis, no retry loop
+    assertThat(callCount.get()).isEqualTo(1);
     assertThat(job.state).isEqualTo(RunbookJobState.FAILED);
     assertThat(job.failureCode).isEqualTo("RUNBOOK_SCHEMA_INVALID");
+  }
+
+  @Test
+  void pregenerated_files_mode_does_not_overwrite_supplied_artifacts() throws Exception {
+    String repo = temporaryGitRepository();
+    String sha = git(repo);
+
+    Path customData = Files.createTempFile("pregen-data", ".json");
+    Path customEv = Files.createTempFile("pregen-ev", ".json");
+    Path customSec = Files.createTempFile("pregen-sec", ".json");
+
+    Files.copy(Path.of("src/test/resources/fixtures/runbook-data.json"), customData, StandardCopyOption.REPLACE_EXISTING);
+    Files.copy(Path.of("src/test/resources/fixtures/runbook-evidence.json"), customEv, StandardCopyOption.REPLACE_EXISTING);
+    Files.writeString(customSec, "{\"contractVersion\":\"2.1\",\"findings\":[]}\n");
+
+    var request = new CreateJobRequest(
+        "pregen-service",
+        new CreateJobRequest.Repository("LOCAL_PATH", repo, sha),
+        new CreateJobRequest.Deployment("TEST"),
+        new CreateJobRequest.ExtractionInput("PREGENERATED_FILES", customData.toString(), customEv.toString(), customSec.toString())
+    );
+
+    RunbookJob job = service.create(request);
+    for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
+
+    assertThat(job.state).withFailMessage("state=%s failure=%s: %s", job.state, job.failureCode, job.failureMessage).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
+    Path root = Path.of(job.artifacts.get("root"));
+    assertThat(root.resolve("extraction/runbook-data.json")).isRegularFile();
   }
 
   private String temporaryGitRepository() throws Exception { Path repo=Files.createTempDirectory("runbook-fixture-repo"); Files.writeString(repo.resolve("README.md"),"fixture"); command(repo,"git","init");command(repo,"git","config","user.email","test@example.invalid");command(repo,"git","config","user.name","Runbook Test");command(repo,"git","add",".");command(repo,"git","commit","-m","fixture");return repo.toString(); }

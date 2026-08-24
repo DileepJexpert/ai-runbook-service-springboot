@@ -281,3 +281,19 @@ curl -X POST http://localhost:8080/api/v1/runbooks/jobs/<JOB_UUID>/publish \
 | Semantic Diffing & Baseline Comparison | **IMPLEMENTED** | In-memory & local filesystem baseline store. |
 | Direct Confluence REST API Client | **NOT YET IMPLEMENTED** | Publisher interface is ready; currently uses local mock registry. |
 | Persistent Database Job Store | **NOT YET IMPLEMENTED** | Uses thread-safe in-memory store (`InMemoryRunbookJobStore`). |
+
+---
+
+## 10. Template-First Extraction & Future Maintenance
+
+The AI Runbook Service uses a **template-first extraction model**:
+- Java creates canonical, schema-valid extraction templates (`runbook-data.template.json`, `runbook-evidence.template.json`, `security-findings.template.json`) in the job's `extraction/` directory before `idfc-coder` runs.
+- `idfc-coder` analyzes the repository fresh from scratch and populates these existing files in place.
+- Java enforces strict JSON schema validation in a single pass.
+
+### Maintenance Workflow for Schema/Contract Changes:
+Whenever the Service Intelligence contract or schema changes:
+1. **Update schemas** in `src/main/resources/runbook-spec/schema/`.
+2. **Update canonical templates** in `src/main/resources/runbook-spec/templates/`.
+3. **Run tests** (`mvn test`) — automated tests will verify that templates validate 100% against schemas.
+4. **Update extraction prompt** in `src/main/resources/runbook-spec/prompt/json-extractor-prompt-v3.txt` if new mandatory fields are introduced.

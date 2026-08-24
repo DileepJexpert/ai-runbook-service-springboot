@@ -17,6 +17,35 @@ public final class PromptAssembler {
       String evidencePolicy,
       String safetyPolicy,
       String qualityExpectations,
+      String regulatoryEvidencePolicy,
+      String runbookDataTemplate,
+      String runbookEvidenceTemplate,
+      String securityFindingsTemplate
+  ) {
+    String text = String.join("\n\n", List.of(
+        promptV3.strip(),
+        extractionContract.strip(),
+        platformContext.strip(),
+        configExtractionPolicy.strip(),
+        evidencePolicy.strip(),
+        safetyPolicy.strip(),
+        qualityExpectations.strip(),
+        regulatoryEvidencePolicy.strip(),
+        "AUTHORITATIVE TEMPLATES FOR EXTRACTION:\n\n=== runbook-data.template.json ===\n" + runbookDataTemplate.strip() +
+        "\n\n=== runbook-evidence.template.json ===\n" + runbookEvidenceTemplate.strip() +
+        "\n\n=== security-findings.template.json ===\n" + securityFindingsTemplate.strip()
+    )) + "\n";
+    return new AssembledPrompt(text, sha256(text));
+  }
+
+  public static AssembledPrompt assemble(
+      String promptV3,
+      String extractionContract,
+      String platformContext,
+      String configExtractionPolicy,
+      String evidencePolicy,
+      String safetyPolicy,
+      String qualityExpectations,
       String regulatoryEvidencePolicy
   ) {
     String text = String.join("\n\n", List.of(

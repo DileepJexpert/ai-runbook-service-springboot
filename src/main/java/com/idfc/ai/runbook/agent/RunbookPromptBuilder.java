@@ -58,6 +58,18 @@ public class RunbookPromptBuilder {
     return readSpecResource("prompt/json-extractor-prompt-v3.txt");
   }
 
+  public String runbookDataTemplate() {
+    return readSpecResource("templates/runbook-data.template.json");
+  }
+
+  public String runbookEvidenceTemplate() {
+    return readSpecResource("templates/runbook-evidence.template.json");
+  }
+
+  public String securityFindingsTemplate() {
+    return readSpecResource("templates/security-findings.template.json");
+  }
+
   public PromptAssembler.AssembledPrompt assembled() {
     return PromptAssembler.assemble(
         promptV3(),
@@ -67,7 +79,10 @@ public class RunbookPromptBuilder {
         evidencePolicy(),
         safetyPolicy(),
         qualityExpectations(),
-        regulatoryEvidencePolicy()
+        regulatoryEvidencePolicy(),
+        runbookDataTemplate(),
+        runbookEvidenceTemplate(),
+        securityFindingsTemplate()
     );
   }
 
