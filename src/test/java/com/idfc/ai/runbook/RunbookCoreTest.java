@@ -619,6 +619,136 @@ class RunbookCoreTest {
     org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> provider.prepare(invalidMode, null));
   }
 
+  @Test
+  void all_23_runbook_sections_exist_in_canonical_template() throws Exception {
+    RunbookSchemaValidator schemaValidator = new RunbookSchemaValidator();
+    JsonNode dataTemplate = schemaValidator.getRunbookDataTemplate();
+
+    for (RunbookSection section : RunbookSection.values()) {
+      if (section.key.isBlank()) continue; // e.g. BOUNDARY has constant boundary text
+      assertThat(dataTemplate.has(section.key))
+          .withFailMessage("Missing canonical template field for section: %s expected key: %s", section.heading, section.key)
+          .isTrue();
+    }
+  }
+
+  @Test
+  void prompt_v3_contains_canonical_shapes_and_forbids_arbitrary_field_names() {
+    RunbookProperties properties = new RunbookProperties();
+    RunbookPromptBuilder builder = new RunbookPromptBuilder(properties);
+    String prompt = builder.prompt();
+
+    // Canonical section fields in prompt
+    assertThat(prompt).contains("\"responseMappings\": []");
+    assertThat(prompt).contains("\"stateTransitions\": []");
+    assertThat(prompt).contains("\"logSignatures\": []");
+
+    // Canonical item property expectations
+    assertThat(prompt).contains("`responseMappings`");
+    assertThat(prompt).contains("`errorCode`", "`result`", "`possibleCauses`", "`howToConfirm`", "`supportAction`");
+    assertThat(prompt).contains("`stateTransitions`");
+    assertThat(prompt).contains("`fromState`", "`toState`", "`trigger`", "`action`", "`recovery`");
+    assertThat(prompt).contains("`logSignatures`");
+    assertThat(prompt).contains("`signature`");
+
+    // Explicit prohibitions
+    assertThat(prompt).contains("DO NOT use `logPattern` or `message`");
+    assertThat(prompt).contains("DO NOT use `description`");
+    assertThat(prompt).contains("DO NOT use `causes`");
+    assertThat(prompt).contains("DO NOT use `troubleshooting`");
+    assertThat(prompt).contains("DO NOT use `supportCheck`");
+  }
+
+  @Test
+  void populated_canonical_sections_render_properly_in_confluence_and_markdown() throws Exception {
+    ObjectMapper om = new ObjectMapper();
+    JsonNode data = om.readTree("""
+        {
+          "contractVersion": "2.1",
+          "schemaVersion": "2.1",
+          "generator": { "scanStatus": "COMPLETE" },
+          "service": { "name": "payments-service" },
+          "responseMappings": [
+            {
+              "errorCode": "PAY_4001",
+              "result": "Payment Rejected",
+              "possibleCauses": "Insufficient balance",
+              "howToConfirm": "Check account ledger balance",
+              "supportAction": "Advise customer to top up funds"
+            }
+          ],
+          "stateTransitions": [
+            {
+              "fromState": "INITIATED",
+              "toState": "COMPLETED",
+              "trigger": "CBS_SUCCESS_ACK",
+              "action": "Update status to success",
+              "recovery": "Auto-reconcile worker on failure",
+              "supportAction": "Inspect reconciliation log"
+            }
+          ],
+          "logSignatures": [
+            {
+              "signature": "PAYMENT_GATEWAY_TIMEOUT",
+              "result": "Transaction marked pending",
+              "possibleCauses": "Network glitch to upstream gateway",
+              "howToConfirm": "Grep logs for PAYMENT_GATEWAY_TIMEOUT",
+              "supportAction": "Check gateway status page"
+            }
+          ]
+        }
+        """);
+
+    ConfluenceRunbookRenderer confluence = new ConfluenceRunbookRenderer();
+    MarkdownRunbookRenderer markdown = new MarkdownRunbookRenderer();
+
+    String html = confluence.render(data);
+    String md = markdown.render(data);
+
+    // Response & Error Mapping
+    assertThat(html).contains("<h2>Response &amp; Error Mapping</h2>");
+    assertThat(html).contains("<code>PAY_4001</code>", "Payment Rejected", "Insufficient balance", "Check account ledger balance");
+    assertThat(md).contains("## Response & Error Mapping");
+    assertThat(md).contains("`PAY_4001`", "Payment Rejected", "Insufficient balance");
+
+    // Transaction Lifecycle, States & Recovery
+    assertThat(html).contains("<h2>Transaction Lifecycle, States &amp; Recovery</h2>");
+    assertThat(html).contains("INITIATED", "COMPLETED", "CBS_SUCCESS_ACK", "Update status to success");
+    assertThat(md).contains("## Transaction Lifecycle, States & Recovery");
+    assertThat(md).contains("INITIATED", "COMPLETED", "CBS_SUCCESS_ACK");
+
+    // Operational Errors & Troubleshooting
+    assertThat(html).contains("<h2>Operational Errors &amp; Troubleshooting</h2>");
+    assertThat(html).contains("<code>PAYMENT_GATEWAY_TIMEOUT</code>", "Transaction marked pending", "Network glitch to upstream gateway");
+    assertThat(md).contains("## Operational Errors & Troubleshooting");
+    assertThat(md).contains("`PAYMENT_GATEWAY_TIMEOUT`", "Transaction marked pending");
+  }
+
+  @Test
+  void empty_canonical_sections_render_absence_without_error() throws Exception {
+    ObjectMapper om = new ObjectMapper();
+    JsonNode data = om.readTree("""
+        {
+          "contractVersion": "2.1",
+          "schemaVersion": "2.1",
+          "generator": { "scanStatus": "COMPLETE" },
+          "service": { "name": "payments-service" },
+          "responseMappings": [],
+          "stateTransitions": [],
+          "logSignatures": []
+        }
+        """);
+
+    ConfluenceRunbookRenderer confluence = new ConfluenceRunbookRenderer();
+    MarkdownRunbookRenderer markdown = new MarkdownRunbookRenderer();
+
+    String html = confluence.render(data);
+    String md = markdown.render(data);
+
+    assertThat(html).contains("<p>Not found in repository</p>");
+    assertThat(md).contains("Not found in repository");
+  }
+
   private void assertMarkdownTableShape(String markdown, String header, int columns) {
     String[] lines = markdown.split("\\R");
     for (int index = 0; index < lines.length; index++) {

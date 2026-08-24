@@ -20,13 +20,131 @@ JAVA OWNS: WHERE facts are stored (canonical schema structure).
 
 DO NOT:
 - Invent a new JSON structure or alternative model.
-- Rename properties (e.g. do NOT rename `service.name` to `serviceName`).
+- Rename properties (e.g. do NOT rename `service.name` to `serviceName`, or `signature` to `logPattern`).
 - Flatten nested objects (e.g. do NOT move `service.name` or `generator.scanStatus` to the root level).
 - Move fields to unauthorized paths.
 - Remove required fields or omit `schemaVersion: "2.1"`.
 - Change `contractVersion` or `schemaVersion` away from `"2.1"`.
 - Create additional AI JSON artifacts.
 - Render Markdown (`RUNBOOK.md`) or HTML (`confluence-body.html`).
+
+============================================================
+CANONICAL SECTION RULES & POPULATION GUIDANCE
+============================================================
+
+The 23 canonical section fields in `runbook-data.json` are already initialized and present in the template.
+
+When repository evidence supports a section, populate THAT specific canonical section field directly with the exact expected item property names.
+
+Do not leave a canonical section empty merely because the same underlying fact was already recorded in another collection. The same repository fact MAY legitimately support more than one section when operationally relevant, as long as each occurrence is repository-proven and cited in `runbook-evidence.json`:
+- A downstream integration failure may legitimately support `downstreamDependencies` (integration purpose/timeouts), `responseMappings` (error code returned to caller), `stateTransitions` (state machine rollback/deemed transition), and `logSignatures` (specific log message emitted).
+
+Do NOT invent facts to fill sections. If repository evidence does not establish facts for a section, leave that section's array empty (`[]`).
+
+============================================================
+EXACT CANONICAL ITEM SHAPES PER SECTION
+============================================================
+
+Populate item objects inside each array using ONLY the canonical property names below:
+
+1. `responseMappings` (Response & Error Mapping table):
+   - `errorCode`: HTTP error code or internal business error code (e.g. "400", "PAY_4001")
+   - `result`: Error result / response message returned to client
+   - `possibleCauses`: Root cause description or validation failure reason
+   - `howToConfirm`: Verification steps or log check
+   - `supportAction`: Read-only Support inspection or escalation action
+
+2. `stateTransitions` (Transaction Lifecycle, States & Recovery):
+   - `fromState`: Initial transaction state (e.g. "INITIATED", "PENDING_EXECUTION")
+   - `toState`: Target transaction state (e.g. "SUCCESS", "DEEMED_FAILED", "REVERSED")
+   - `trigger`: Event, API request, or scheduler trigger causing the transition
+   - `action`: Automated system action performed during transition
+   - `recovery`: Automated retry, recovery worker, or compensation mechanism
+   - `supportAction`: Read-only Support inspection steps for stuck states
+
+3. `logSignatures` (Operational Errors & Troubleshooting table):
+   - `signature`: Error code, exception class, or distinctive log message pattern (DO NOT use `logPattern` or `message`)
+   - `result`: Operational impact or transaction outcome (DO NOT use `description`)
+   - `possibleCauses`: Known causes or trigger conditions (DO NOT use `causes`)
+   - `howToConfirm`: How Support verifies or locates this error in logs (DO NOT use `troubleshooting`)
+   - `supportAction`: Read-only triage and evidence collection steps (DO NOT use `supportCheck`)
+
+4. `businessRules` (Business Decision Rules table):
+   - `condition`: Business condition or validation predicate
+   - `dataUsed`: Data fields or reference sources evaluated
+   - `result`: Outcome or decision produced
+   - `supportCheck`: Read-only verification check for Support
+
+5. `downstreamDependencies` (Downstream Dependencies & Response Interpretation table):
+   - `name`: Downstream system or service identifier (e.g. "CBS", "PAYMENT_RAILS")
+   - `purpose`: Functional role of the integration
+   - `timeout`: Configured network timeout (e.g. "2000ms")
+   - `automaticFailureHandling`: Automated retry, circuit breaker, or fallback behavior
+   - `failurePropagation`: How the downstream failure is surfaced to upstream callers
+   - `supportCheck`: Read-only verification steps for Support
+
+6. `databaseTables` (Datastore Support Evidence table):
+   - `table`: Table name
+   - `schema`: Database schema name (default "public")
+   - `access`: "READ" | "WRITE" | "READ_WRITE"
+   - `lookupKey`: Primary or query lookup key for Support
+   - `supportFields`: Array of support-relevant column names (e.g. ["status", "payment_id", "updated_at"])
+   - `operationalPurpose`: Operational role of the datastore
+
+7. `kafkaConsumers` & `kafkaProducers` (Kafka & Asynchronous Processing table):
+   - `topic`: Kafka topic name
+   - `group`: Consumer group ID (for consumers)
+   - `businessPurpose`: Functional role of event consumption / publishing
+   - `failureHandling`: Dead-letter queue, retry policy, or error handling
+
+8. `retentionRules` (Data Retention, Expiry & Archival table):
+   - `store`: Datastore or entity name
+   - `retention`: Retention period or TTL duration
+   - `mechanism`: Expiry job, DB partition drop, or archival scheduler
+   - `archiveDestination`: Long-term archive target
+   - `supportImpact`: Impact on Support queries
+
+9. `migrationRisks` (Deployment / Schema Compatibility table):
+   - `migration`: Migration file or script identifier
+   - `changeType`: Type of change (e.g. "ADD_COLUMN", "NEW_TABLE")
+   - `compatibilityRisk`: Risk to running version during rolling deployment
+   - `supportMeaning`: Operational impact for Support during deployment
+
+10. `rateLimits`:
+    - `name`: Rate limit identifier
+    - `limit`: Rate limit threshold
+    - `window`: Time window
+    - `actionOnExceed`: Action when rate limit exceeded (e.g. "429 Too Many Requests")
+
+11. `duplicateProtection`:
+    - `mechanism`: Idempotency mechanism (e.g. "Idempotency-Key header", "Unique DB index")
+    - `key`: Idempotency key field
+    - `storage`: Where key is tracked (e.g. "Redis", "Database")
+    - `ttl`: Key retention TTL
+
+12. `dataLineage`:
+    - `source`: Upstream origin
+    - `target`: Downstream destination
+    - `transformation`: Transformation logic applied
+    - `purpose`: Business objective
+
+13. `traceIdentifiers`:
+    - `identifier`: Header or attribute name (e.g. "X-Correlation-ID", "paymentId")
+    - `header`: HTTP / Kafka header name
+    - `purpose`: Purpose in distributed tracing
+    - `logKey`: Key name in structured MDC logs
+
+14. `unknownIncidentContext`:
+    - `context`: Operational triage context
+    - `inspectionSteps`: Read-only queries and log searches
+    - `triageSteps`: Diagnostic steps
+    - `escalationPath`: Escalation routing
+
+15. `escalationEvidence`:
+    - `evidenceItem`: Evidence artifact to collect (e.g. "Payment state timeline", "Downstream response payload")
+    - `source`: Source API or database table
+    - `command`: Read-only command or query
+    - `purpose`: Why this evidence is required for escalation
 
 ============================================================
 EXACT CANONICAL ARTIFACT SCHEMAS & SKELETONS
@@ -42,7 +160,7 @@ Top-level REQUIRED fields:
 - "pipeline": object with "serviceName" and "gitCommitSha"
 - "service": object with "name", "businessPurpose", "criticality", "supportOwner", "businessOwner", and "escalationChannel"
 - "processingSummary": object with "summary"
-- Arrays: "businessFlows", "businessRules", "apis", "databaseTables", "downstreamDependencies", "kafkaConsumers", "kafkaProducers", "configuration", "featureFlags", "resilience", "logSignatures", "traceIdentifiers", "configuredAlerts", "supportHealthChecks", "unknownIncidentContext", "escalationEvidence"
+- Arrays: "businessFlows", "apis", "businessRules", "responseMappings", "dataLineage", "stateTransitions", "downstreamDependencies", "databaseTables", "kafkaConsumers", "kafkaProducers", "configuration", "featureFlags", "resilience", "rateLimits", "retentionRules", "duplicateProtection", "migrationRisks", "logSignatures", "configuredAlerts", "supportHealthChecks", "traceIdentifiers", "unknownIncidentContext", "escalationEvidence"
 
 SCHEMA WARNINGS:
 - DO NOT place "serviceName" at the root level. The service identity MUST be inside `"service": {"name": "..."}`.
@@ -76,19 +194,26 @@ Exact JSON Skeleton:
     "summary": "<Processing summary description>"
   },
   "businessFlows": [],
-  "businessRules": [],
   "apis": [],
-  "databaseTables": [],
+  "businessRules": [],
+  "responseMappings": [],
+  "dataLineage": [],
+  "stateTransitions": [],
   "downstreamDependencies": [],
+  "databaseTables": [],
   "kafkaConsumers": [],
   "kafkaProducers": [],
   "configuration": [],
   "featureFlags": [],
   "resilience": [],
+  "rateLimits": [],
+  "retentionRules": [],
+  "duplicateProtection": [],
+  "migrationRisks": [],
   "logSignatures": [],
-  "traceIdentifiers": [],
   "configuredAlerts": [],
   "supportHealthChecks": [],
+  "traceIdentifiers": [],
   "unknownIncidentContext": [],
   "escalationEvidence": []
 }
