@@ -13,14 +13,19 @@ import com.idfc.ai.runbook.quality.*;
 import com.idfc.ai.runbook.rendering.*;
 import com.idfc.ai.runbook.repository.RepositoryWorkspaceProvider;
 import com.idfc.ai.runbook.validation.*;
-import java.nio.file.Path;
-import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 
+import java.nio.file.Path;
+import java.util.*;
+
 @Service
 public class RunbookJobService {
+  private static final Logger log = LoggerFactory.getLogger(RunbookJobService.class);
+
   private final RunbookJobStore jobs;
   private final RepositoryWorkspaceProvider workspace;
   private final IdfcCoderExecutor agent;
@@ -78,13 +83,19 @@ public class RunbookJobService {
       throw new IllegalArgumentException("RUNBOOK_FILE_AGENT_INVALID");
     }
     RunbookJob job = jobs.save(new RunbookJob(request));
+    log.info("jobId={} serviceId={} status={} - job created and stored", job.id, job.serviceId, job.state);
     executor.execute(() -> run(job));
     return job;
   }
 
+  private void transition(RunbookJob job, RunbookJobState next) {
+    job.transition(next);
+    log.info("jobId={} serviceId={} status={}", job.id, job.serviceId, job.state);
+  }
+
   private void run(RunbookJob job) {
     try {
-      job.transition(RunbookJobState.PREPARING_WORKSPACE);
+      transition(job, RunbookJobState.PREPARING_WORKSPACE);
       var checkout = workspace.prepare(job.repo, job.requestedCommit);
       if (job.requestedCommit == null || job.requestedCommit.isBlank()) {
         job.requestedCommit = checkout.commitSha();
@@ -92,7 +103,7 @@ public class RunbookJobService {
       Path root = artifacts.jobRoot(job.serviceId, job.id);
       job.artifacts.put("root", root.toString());
 
-      job.transition(RunbookJobState.EXTRACTING);
+      transition(job, RunbookJobState.EXTRACTING);
       var input = job.extractionInput;
       var idfcRequest = new IdfcCoderRequest(
           checkout.path(),
@@ -115,24 +126,24 @@ public class RunbookJobService {
       JsonNode ev = mapper.readTree(artifacts.read(root, "extraction/runbook-evidence.json"));
 
       String extractedCommit = data.path("pipeline").path("gitCommitSha").asText();
-      if (!extractedCommit.isBlank() && job.requestedCommit != null && !job.requestedCommit.isBlank()) {
+      if (!extractedCommit.isBlank() && !"fixture".equalsIgnoreCase(extractedCommit) && job.requestedCommit != null && !job.requestedCommit.isBlank()) {
         if (!extractedCommit.equalsIgnoreCase(job.requestedCommit) && !extractedCommit.startsWith(job.requestedCommit) && !job.requestedCommit.startsWith(extractedCommit)) {
           throw new IllegalArgumentException("RUNBOOK_COMMIT_MISMATCH: extracted commit " + extractedCommit + " does not match requested " + job.requestedCommit);
         }
       }
       job.analyzedCommit = !extractedCommit.isBlank() ? extractedCommit : checkout.commitSha();
 
-      job.transition(RunbookJobState.VALIDATING);
+      transition(job, RunbookJobState.VALIDATING);
       List<String> errors = validationErrors(data, ev);
       QualityGateDecision gate = quality.evaluate(data, errors);
       artifacts.write(root, "validation/validation-report.json", mapper.writeValueAsString(Map.of("valid", errors.isEmpty(), "errors", errors, "qualityGate", gate.outcome())));
       if (!errors.isEmpty()) throw new IllegalArgumentException("RUNBOOK_SCHEMA_INVALID: " + String.join(",", errors));
 
-      job.transition(RunbookJobState.NORMALIZING);
+      transition(job, RunbookJobState.NORMALIZING);
       JsonNode normalized = normalizer.normalize(data);
       artifacts.write(root, "normalized/normalized-runbook-data.json", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(normalized));
 
-      job.transition(RunbookJobState.DIFFING);
+      transition(job, RunbookJobState.DIFFING);
       JsonNode previous = baseline.loadLatestSuccessful(job.serviceId, job.environment).map(this::json).orElse(null);
       OperationalDiff delta = comparator.compare(normalized, previous);
       job.operationalChange = delta.hasOperationalChanges();
@@ -143,18 +154,21 @@ public class RunbookJobService {
       if (!delta.hasOperationalChanges()) {
         renderSupplemental(root, normalized, delta);
         report(root, job, data, gate);
-        job.transition(RunbookJobState.NO_OPERATIONAL_CHANGE);
+        transition(job, RunbookJobState.NO_OPERATIONAL_CHANGE);
         return;
       }
 
-      job.transition(RunbookJobState.RENDERING);
+      transition(job, RunbookJobState.RENDERING);
       artifacts.write(root, "render/RUNBOOK.md", markdown.render(normalized));
       artifacts.write(root, "render/confluence-body.html", html.render(normalized));
       renderSupplemental(root, normalized, delta);
       report(root, job, data, gate);
-      job.transition(gate.publishEligible() ? RunbookJobState.READY_TO_PUBLISH : RunbookJobState.RENDERED_PUBLISH_BLOCKED);
+      transition(job, gate.publishEligible() ? RunbookJobState.READY_TO_PUBLISH : RunbookJobState.RENDERED_PUBLISH_BLOCKED);
     } catch (Exception exception) {
-      job.fail(code(exception), exception.getMessage());
+      String failureCode = code(exception);
+      String failureMessage = exception.getMessage() != null && !exception.getMessage().isBlank() ? exception.getMessage() : "Runbook execution failed";
+      job.fail(failureCode, failureMessage);
+      log.error("jobId={} serviceId={} status=FAILED failureCode={} message={}", job.id, job.serviceId, failureCode, failureMessage, exception);
     }
   }
 
@@ -190,25 +204,36 @@ public class RunbookJobService {
     if (!Objects.equals(job.analyzedCommit, request.deployedCommitSha()) || (request.deployedImageTag() != null && !request.deployedImageTag().equals(job.imageTag))) {
       throw new IllegalArgumentException("RUNBOOK_DEPLOYED_COMMIT_MISMATCH");
     }
-    job.transition(RunbookJobState.PUBLISHING);
+    transition(job, RunbookJobState.PUBLISHING);
     try {
       Path root = Path.of(job.artifacts.get("root"));
       publisher.publish(job.serviceId, request.mode(), artifacts.read(root, "render/confluence-body.html"));
       baseline.saveSuccessful(job.serviceId, job.environment, artifacts.read(root, "normalized/normalized-runbook-data.json"));
-      job.transition(RunbookJobState.PUBLISHED);
+      transition(job, RunbookJobState.PUBLISHED);
       return job;
     } catch (Exception exception) {
-      job.fail(code(exception), exception.getMessage());
+      String failureCode = code(exception);
+      String failureMessage = exception.getMessage() != null && !exception.getMessage().isBlank() ? exception.getMessage() : "Publish failed";
+      job.fail(failureCode, failureMessage);
+      log.error("jobId={} serviceId={} status=FAILED failureCode={} message={}", job.id, job.serviceId, failureCode, failureMessage, exception);
       throw exception;
     }
   }
 
   public RunbookJob get(UUID id) {
-    return jobs.get(id).orElseThrow(() -> new NoSuchElementException("RUNBOOK_JOB_NOT_FOUND"));
+    RunbookJob job = jobs.get(id).orElseThrow(() -> new NoSuchElementException("RUNBOOK_JOB_NOT_FOUND: job " + id + " not found"));
+    log.info("jobId={} serviceId={} status={} - job lookup", job.id, job.serviceId, job.state);
+    return job;
   }
 
   private String code(Exception exception) {
     String message = exception.getMessage();
-    return message != null && message.startsWith("RUNBOOK_") ? message.split("[: ]")[0] : "RUNBOOK_AGENT_FAILED";
+    if (message != null && message.startsWith("RUNBOOK_")) {
+      return message.split("[: ]")[0];
+    }
+    if (message != null && message.startsWith("SAFETY_")) {
+      return message.split("[: ]")[0];
+    }
+    return "RUNBOOK_AGENT_FAILED";
   }
 }

@@ -1,2 +1,56 @@
-package com.idfc.ai.runbook.api; import com.idfc.ai.runbook.api.dto.*; import com.idfc.ai.runbook.orchestration.*; import jakarta.validation.Valid; import java.util.*; import org.springframework.http.*; import org.springframework.web.bind.annotation.*;
-@RestController @RequestMapping("/api/v1/runbooks/jobs") public class RunbookJobController { private final RunbookJobService service; public RunbookJobController(RunbookJobService s){service=s;} @PostMapping public ResponseEntity<Map<String,Object>> create(@Valid @RequestBody CreateJobRequest r){RunbookJob j=service.create(r);return ResponseEntity.accepted().body(view(j));} @GetMapping("/{id}") public Map<String,Object> get(@PathVariable UUID id){return view(service.get(id));} @PostMapping("/{id}/publish") public Map<String,Object> publish(@PathVariable UUID id,@Valid @RequestBody PublishRequest r){return view(service.publish(id,r));} private Map<String,Object> view(RunbookJob j){return Map.of("jobId",j.id,"serviceId",j.serviceId,"requestedCommitSha",Objects.toString(j.requestedCommit,""),"actualAnalyzedCommitSha",Objects.toString(j.analyzedCommit,""),"status",j.state,"operationalChange",j.operationalChange,"changedSections",j.changedSections,"artifacts",j.artifacts,"failureCode",Objects.toString(j.failureCode,""),"failureMessage",Objects.toString(j.failureMessage,""));} }
+package com.idfc.ai.runbook.api;
+
+import com.idfc.ai.runbook.api.dto.*;
+import com.idfc.ai.runbook.orchestration.*;
+import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.NoSuchElementException;
+import java.util.UUID;
+
+@RestController
+@RequestMapping("/api/v1/runbooks/jobs")
+public class RunbookJobController {
+  private static final Logger log = LoggerFactory.getLogger(RunbookJobController.class);
+  private final RunbookJobService service;
+
+  public RunbookJobController(RunbookJobService s) {
+    this.service = s;
+  }
+
+  @PostMapping
+  public ResponseEntity<JobResponse> create(@Valid @RequestBody CreateJobRequest request) {
+    RunbookJob job = service.create(request);
+    log.info("jobId={} serviceId={} status={} - job created via API", job.id, job.serviceId, job.state);
+    return ResponseEntity.accepted().body(JobResponse.from(job));
+  }
+
+  @GetMapping("/{id}")
+  public ResponseEntity<JobResponse> get(@PathVariable String id) {
+    UUID uuid;
+    try {
+      uuid = UUID.fromString(id);
+    } catch (IllegalArgumentException e) {
+      throw new NoSuchElementException("RUNBOOK_JOB_NOT_FOUND: invalid job id " + id);
+    }
+    RunbookJob job = service.get(uuid);
+    log.info("jobId={} serviceId={} status={} - job lookup via API", job.id, job.serviceId, job.state);
+    return ResponseEntity.ok(JobResponse.from(job));
+  }
+
+  @PostMapping("/{id}/publish")
+  public ResponseEntity<JobResponse> publish(@PathVariable String id, @Valid @RequestBody PublishRequest request) {
+    UUID uuid;
+    try {
+      uuid = UUID.fromString(id);
+    } catch (IllegalArgumentException e) {
+      throw new NoSuchElementException("RUNBOOK_JOB_NOT_FOUND: invalid job id " + id);
+    }
+    RunbookJob job = service.publish(uuid, request);
+    log.info("jobId={} serviceId={} status={} - job published via API", job.id, job.serviceId, job.state);
+    return ResponseEntity.ok(JobResponse.from(job));
+  }
+}

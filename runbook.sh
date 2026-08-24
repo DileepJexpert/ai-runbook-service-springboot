@@ -179,9 +179,20 @@ PAYLOAD=$(build_payload)
 
 # 4. Submit Runbook Job
 echo "Submitting runbook generation job..."
-CREATE_RESPONSE=$(curl -s -X POST "$BASE_URL/api/v1/runbooks/jobs" \
+CREATE_RAW_OUTPUT=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "$BASE_URL/api/v1/runbooks/jobs" \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD")
+
+CREATE_STATUS=$(echo "$CREATE_RAW_OUTPUT" | grep '^HTTP_STATUS:' | tail -n 1 | sed 's/HTTP_STATUS://')
+CREATE_RESPONSE=$(echo "$CREATE_RAW_OUTPUT" | grep -v '^HTTP_STATUS:')
+
+if [[ -z "$CREATE_STATUS" || "$CREATE_STATUS" -lt 200 || "$CREATE_STATUS" -ge 300 ]]; then
+  echo ""
+  echo "[ERROR] Failed to create runbook job."
+  echo "HTTP Status: ${CREATE_STATUS:-UNKNOWN}"
+  echo "Response:    $CREATE_RESPONSE"
+  exit 1
+fi
 
 parse_json_field() {
   local json_str="$1"
@@ -202,7 +213,7 @@ PYEOF
 JOB_ID=$(parse_json_field "$CREATE_RESPONSE" "jobId")
 
 if [[ -z "$JOB_ID" ]]; then
-  echo "[ERROR] Failed to submit job. Response from server:"
+  echo "[ERROR] Failed to parse jobId from server response:"
   echo "$CREATE_RESPONSE"
   exit 1
 fi
@@ -211,16 +222,34 @@ echo "Job created successfully: $JOB_ID"
 echo ""
 echo "Processing runbook pipeline..."
 
-# 5. Poll Job Status
+# 5. Poll Job Status defensively
 LAST_STATUS=""
 TERMINAL_STATUSES=("READY_TO_PUBLISH" "NO_OPERATIONAL_CHANGE" "RENDERED_PUBLISH_BLOCKED" "FAILED")
 JOB_JSON=""
 
 while true; do
-  JOB_JSON=$(curl -s "$BASE_URL/api/v1/runbooks/jobs/$JOB_ID")
+  POLL_RAW_OUTPUT=$(curl -s -w "\nHTTP_STATUS:%{http_code}" "$BASE_URL/api/v1/runbooks/jobs/$JOB_ID")
+  POLL_STATUS=$(echo "$POLL_RAW_OUTPUT" | grep '^HTTP_STATUS:' | tail -n 1 | sed 's/HTTP_STATUS://')
+  JOB_JSON=$(echo "$POLL_RAW_OUTPUT" | grep -v '^HTTP_STATUS:')
+
+  if [[ -z "$POLL_STATUS" || "$POLL_STATUS" -lt 200 || "$POLL_STATUS" -ge 300 ]]; then
+    echo ""
+    echo "[ERROR] Could not retrieve job status from AI Runbook Service."
+    echo "HTTP Status: ${POLL_STATUS:-UNKNOWN}"
+    echo "Response:    $JOB_JSON"
+    exit 1
+  fi
+
   CURRENT_STATUS=$(parse_json_field "$JOB_JSON" "status")
 
-  if [[ "$CURRENT_STATUS" != "$LAST_STATUS" && -n "$CURRENT_STATUS" ]]; then
+  if [[ -z "$CURRENT_STATUS" ]]; then
+    echo ""
+    echo "[ERROR] Malformed job response received (missing 'status' field):"
+    echo "$JOB_JSON"
+    exit 1
+  fi
+
+  if [[ "$CURRENT_STATUS" != "$LAST_STATUS" ]]; then
     echo "  ➜ Status: $CURRENT_STATUS"
     LAST_STATUS="$CURRENT_STATUS"
   fi

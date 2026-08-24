@@ -3,6 +3,8 @@ package com.idfc.ai.runbook.orchestration;
 import com.idfc.ai.runbook.api.dto.CreateJobRequest;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class RunbookJob {
   public final UUID id = UUID.randomUUID();
@@ -17,8 +19,8 @@ public class RunbookJob {
   public volatile String failureMessage;
   public volatile RunbookJobState state = RunbookJobState.RECEIVED;
   public volatile boolean operationalChange;
-  public final List<String> changedSections = new ArrayList<>();
-  public final Map<String, String> artifacts = new TreeMap<>();
+  public final List<String> changedSections = new CopyOnWriteArrayList<>();
+  public final Map<String, String> artifacts = new ConcurrentHashMap<>();
   public final Instant receivedAt = Instant.now();
   public volatile Instant updatedAt = receivedAt;
 
