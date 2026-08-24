@@ -164,4 +164,31 @@ class RunbookJobControllerTest {
         .andExpect(jsonPath("$.failureCode").isNotEmpty())
         .andExpect(jsonPath("$.failureMessage").isNotEmpty());
   }
+
+  @Test
+  void publish_endpoint_binds_id_path_variable_correctly() throws Exception {
+    CreateJobRequest request = new CreateJobRequest(
+        "publish-bind-service",
+        new CreateJobRequest.Repository("BITBUCKET", null, "https://bitbucket.bank.local/scm/test/test.git", "main", "1234567"),
+        new CreateJobRequest.Deployment("TEST")
+    );
+    RunbookJob job = new RunbookJob(request);
+    job.transition(RunbookJobState.PREPARING_WORKSPACE);
+    job.transition(RunbookJobState.EXTRACTING);
+    job.transition(RunbookJobState.VALIDATING);
+    job.transition(RunbookJobState.NORMALIZING);
+    job.transition(RunbookJobState.DIFFING);
+    job.transition(RunbookJobState.RENDERING);
+    job.transition(RunbookJobState.READY_TO_PUBLISH);
+    job.analyzedCommit = "1234567";
+    job.artifacts.put("root", "target");
+    jobStore.save(job);
+
+    // Publishing to unknown id returns 404
+    mvc.perform(post("/api/v1/runbooks/jobs/" + UUID.randomUUID() + "/publish")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"mode\":\"TEST\",\"deployedCommitSha\":\"1234567\"}"))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.code").value("RUNBOOK_JOB_NOT_FOUND"));
+  }
 }

@@ -29,7 +29,7 @@ public class RunbookJobController {
   }
 
   @GetMapping("/{id}")
-  public ResponseEntity<JobResponse> get(@PathVariable String id) {
+  public ResponseEntity<JobResponse> get(@PathVariable("id") String id) {
     UUID uuid;
     try {
       uuid = UUID.fromString(id);
@@ -42,7 +42,7 @@ public class RunbookJobController {
   }
 
   @PostMapping("/{id}/publish")
-  public ResponseEntity<JobResponse> publish(@PathVariable String id, @Valid @RequestBody PublishRequest request) {
+  public ResponseEntity<JobResponse> publish(@PathVariable("id") String id, @Valid @RequestBody PublishRequest request) {
     UUID uuid;
     try {
       uuid = UUID.fromString(id);
