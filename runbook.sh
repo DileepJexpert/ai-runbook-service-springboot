@@ -15,7 +15,7 @@ ENVIRONMENT="TEST"
 NO_OPEN=false
 
 show_help() {
-  cat << EOF
+  cat << 'EOF'
 AI Runbook Generator CLI
 
 Usage:
@@ -80,7 +80,7 @@ echo "============================================================"
 
 # 1. Verify Service Health
 echo -n "Checking AI Runbook Service health at $BASE_URL... "
-HEALTH_RESPONSE=$(curl -s -m 5 "$BASE_URL/actuator/health" || echo "")
+HEALTH_RESPONSE=$(curl -s -m 5 "$BASE_URL/actuator/health" 2>/dev/null || echo "")
 if [[ "$HEALTH_RESPONSE" != *"\"UP\""* && "$HEALTH_RESPONSE" != *"UP"* ]]; then
   echo "UNAVAILABLE"
   echo ""
@@ -144,49 +144,38 @@ fi
 echo "  Environment: $ENVIRONMENT"
 echo ""
 
-# 3. Build JSON Request Payload
-PAYLOAD=$(python3 -c "
-import json
+# 3. Build JSON Request Payload safely using python arguments
+build_payload() {
+  python3 - "$SERVICE_ID" "$REPO_MODE" "$REPO_URL" "$REPO_BRANCH" "$COMMIT_SHA" "$LOCAL_PATH" "$ENVIRONMENT" << 'PYEOF'
+import sys, json
+
+service_id, repo_mode, repo_url, repo_branch, commit_sha, local_path, env = sys.argv[1:8]
+
 data = {
-    'serviceId': '$SERVICE_ID',
-    'repository': {
-        'mode': '$REPO_MODE'
+    "serviceId": service_id,
+    "repository": {
+        "mode": repo_mode
     },
-    'deployment': {
-        'environment': '$ENVIRONMENT'
+    "deployment": {
+        "environment": env
     }
 }
-if '$REPO_MODE' == 'BITBUCKET':
-    data['repository']['url'] = '$REPO_URL'
-    if '$REPO_BRANCH':
-        data['repository']['branch'] = '$REPO_BRANCH'
-    if '$COMMIT_SHA':
-        data['repository']['commitSha'] = '$COMMIT_SHA'
+if repo_mode == "BITBUCKET":
+    data["repository"]["url"] = repo_url
+    if repo_branch:
+        data["repository"]["branch"] = repo_branch
+    if commit_sha:
+        data["repository"]["commitSha"] = commit_sha
 else:
-    data['repository']['localPath'] = '$LOCAL_PATH'
-    if '$COMMIT_SHA':
-        data['repository']['commitSha'] = '$COMMIT_SHA'
+    data["repository"]["localPath"] = local_path
+    if commit_sha:
+        data["repository"]["commitSha"] = commit_sha
 
 print(json.dumps(data))
-" 2>/dev/null || cat << EOF
-{
-  "serviceId": "$SERVICE_ID",
-  "repository": {
-    "mode": "$REPO_MODE",
-    $([ "$REPO_MODE" = "BITBUCKET" ] && echo "\"url\": \"$REPO_URL\", $([ -n "$REPO_BRANCH" ] && echo "\"branch\": \"$REPO_BRANCH\",)")
-    $([ "$REPO_MODE" = "LOCAL_PATH" ] && echo "\"localPath\": \"$LOCAL_PATH\",")
-    $([ -n "$COMMIT_SHA" ] && echo "\"commitSha\": \"$COMMIT_SHA\",")
-    "dummy": ""
-  },
-  "deployment": {
-    "environment": "$ENVIRONMENT"
-  }
+PYEOF
 }
-EOF
-)
 
-# Clean up payload formatting if fallback was used
-PAYLOAD=$(echo "$PAYLOAD" | sed 's/, "dummy": ""//g' | sed 's/,"dummy":""//g')
+PAYLOAD=$(build_payload)
 
 # 4. Submit Runbook Job
 echo "Submitting runbook generation job..."
@@ -194,8 +183,23 @@ CREATE_RESPONSE=$(curl -s -X POST "$BASE_URL/api/v1/runbooks/jobs" \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD")
 
-JOB_ID=$(python3 -c "import json, sys; print(json.loads('''$CREATE_RESPONSE''').get('jobId', ''))" 2>/dev/null || \
-  echo "$CREATE_RESPONSE" | grep -o '"jobId":"[^"]*' | cut -d'"' -f4)
+parse_json_field() {
+  local json_str="$1"
+  local field="$2"
+  python3 - "$json_str" "$field" << 'PYEOF'
+import sys, json
+try:
+    data = json.loads(sys.argv[1])
+    val = data.get(sys.argv[2], "")
+    if val is None:
+        val = ""
+    print(val)
+except Exception:
+    pass
+PYEOF
+}
+
+JOB_ID=$(parse_json_field "$CREATE_RESPONSE" "jobId")
 
 if [[ -z "$JOB_ID" ]]; then
   echo "[ERROR] Failed to submit job. Response from server:"
@@ -210,14 +214,13 @@ echo "Processing runbook pipeline..."
 # 5. Poll Job Status
 LAST_STATUS=""
 TERMINAL_STATUSES=("READY_TO_PUBLISH" "NO_OPERATIONAL_CHANGE" "RENDERED_PUBLISH_BLOCKED" "FAILED")
+JOB_JSON=""
 
 while true; do
   JOB_JSON=$(curl -s "$BASE_URL/api/v1/runbooks/jobs/$JOB_ID")
-  
-  CURRENT_STATUS=$(python3 -c "import json; print(json.loads('''$JOB_JSON''').get('status', 'UNKNOWN'))" 2>/dev/null || \
-    echo "$JOB_JSON" | grep -o '"status":"[^"]*' | cut -d'"' -f4)
+  CURRENT_STATUS=$(parse_json_field "$JOB_JSON" "status")
 
-  if [[ "$CURRENT_STATUS" != "$LAST_STATUS" ]]; then
+  if [[ "$CURRENT_STATUS" != "$LAST_STATUS" && -n "$CURRENT_STATUS" ]]; then
     echo "  ➜ Status: $CURRENT_STATUS"
     LAST_STATUS="$CURRENT_STATUS"
   fi
@@ -234,18 +237,25 @@ done
 echo ""
 
 # 6. Parse and Print Results
-python3 -c "
-import json, os, sys
+print_job_summary() {
+  python3 - "$JOB_JSON" "$SERVICE_ID" "$REPO_MODE" "$REPO_URL" "$REPO_BRANCH" "$LOCAL_PATH" << 'PYEOF'
+import sys, json, os
 
-job = json.loads('''$JOB_JSON''')
+job_str, service_id, repo_mode, repo_url, repo_branch, local_path = sys.argv[1:7]
+try:
+    job = json.loads(job_str)
+except Exception as e:
+    print(f"Failed to parse job JSON: {e}")
+    sys.exit(1)
+
 status = job.get('status', 'UNKNOWN')
-service_id = job.get('serviceId', '$SERVICE_ID')
+service_id = job.get('serviceId', service_id)
 req_commit = job.get('requestedCommitSha', '')
 ana_commit = job.get('actualAnalyzedCommitSha', '')
 change = job.get('operationalChange', False)
 changed_sections = ', '.join(job.get('changedSections', []))
 artifacts = job.get('artifacts', {})
-root = artifacts.get('root', '')
+root = artifacts.get('root', '') if isinstance(artifacts, dict) else ''
 failure_code = job.get('failureCode', '')
 failure_msg = job.get('failureMessage', '')
 
@@ -254,12 +264,15 @@ if status in ('READY_TO_PUBLISH', 'NO_OPERATIONAL_CHANGE', 'RENDERED_PUBLISH_BLO
     print(' RUNBOOK GENERATION COMPLETED')
     print('============================================================')
     print(f'Service ID:             {service_id}')
-    print(f'Repository:             $REPO_URL' if '$REPO_MODE' == 'BITBUCKET' else f'Local Path:             $LOCAL_PATH')
-    if '$REPO_BRANCH':
-        print(f'Branch:                 $REPO_BRANCH')
+    if repo_mode == 'BITBUCKET':
+        print(f'Repository:             {repo_url}')
+        if repo_branch:
+            print(f'Branch:                 {repo_branch}')
+    else:
+        print(f'Local Path:             {local_path}')
     print(f'Requested Commit:       {req_commit}')
     print(f'Analyzed Commit:        {ana_commit}')
-    print(f'Job ID:                 {job.get(\"jobId\", \"\")}')
+    print(f'Job ID:                 {job.get("jobId", "")}')
     print(f'Final Status:           {status}')
     print(f'Operational Change:     {change}')
     if changed_sections:
@@ -267,39 +280,48 @@ if status in ('READY_TO_PUBLISH', 'NO_OPERATIONAL_CHANGE', 'RENDERED_PUBLISH_BLO
     print(f'Artifact Root:          {root}')
     print('')
     print('Generated Artifacts:')
-    print(f'  Markdown Runbook:     {os.path.join(root, \"render\", \"RUNBOOK.md\")}')
-    print(f'  Confluence HTML:      {os.path.join(root, \"render\", \"confluence-body.html\")}')
-    print(f'  Generation Report:    {os.path.join(root, \"report\", \"generation-report.json\")}')
+    print(f'  Markdown Runbook:     {os.path.join(root, "render", "RUNBOOK.md")}')
+    print(f'  Confluence HTML:      {os.path.join(root, "render", "confluence-body.html")}')
+    print(f'  Generation Report:    {os.path.join(root, "report", "generation-report.json")}')
     print('============================================================')
 else:
     print('============================================================')
     print(' RUNBOOK GENERATION FAILED')
     print('============================================================')
     print(f'Service ID:             {service_id}')
-    print(f'Job ID:                 {job.get(\"jobId\", \"\")}')
-    print(f'Failure Code:           {failure_code}')
-    print(f'Failure Message:        {failure_msg}')
+    print(f'Job ID:                 {job.get("jobId", "")}')
+    if failure_code:
+        print(f'Failure Code:           {failure_code}')
+    if failure_msg:
+        print(f'Failure Message:        {failure_msg}')
     if root:
         print(f'Artifact Root:          {root}')
         print('')
         print('Diagnostic Logs:')
-        print(f'  Stdout log:           {os.path.join(root, \"extraction\", \"idfc-coder.stdout.log\")}')
-        print(f'  Stderr log:           {os.path.join(root, \"extraction\", \"idfc-coder.stderr.log\")}')
-        print(f'  Validation Report:    {os.path.join(root, \"validation\", \"validation-report.json\")}')
+        print(f'  Stdout log:           {os.path.join(root, "extraction", "idfc-coder.stdout.log")}')
+        print(f'  Stderr log:           {os.path.join(root, "extraction", "idfc-coder.stderr.log")}')
+        print(f'  Validation Report:    {os.path.join(root, "validation", "validation-report.json")}')
     print('============================================================')
-" 2>/dev/null || cat << EOF
-============================================================
-Final Status: $LAST_STATUS
-Job ID:       $JOB_ID
-============================================================
-EOF
+PYEOF
+}
+
+print_job_summary
 
 # 7. Prompt to open Confluence HTML if on macOS/Linux/Windows and interactive
-ROOT_DIR=$(python3 -c "import json; print(json.loads('''$JOB_JSON''').get('artifacts', {}).get('root', ''))" 2>/dev/null || echo "")
+ROOT_DIR=$(python3 - "$JOB_JSON" << 'PYEOF'
+import sys, json
+try:
+    job = json.loads(sys.argv[1])
+    print(job.get('artifacts', {}).get('root', ''))
+except Exception:
+    pass
+PYEOF
+)
+
 HTML_FILE="$ROOT_DIR/render/confluence-body.html"
 
 if [[ "$LAST_STATUS" == "READY_TO_PUBLISH" || "$LAST_STATUS" == "NO_OPERATIONAL_CHANGE" ]]; then
-  if [[ "$NO_OPEN" == false && -f "$HTML_FILE" ]]; then
+  if [[ "$NO_OPEN" == false && -n "$ROOT_DIR" && -f "$HTML_FILE" ]]; then
     echo ""
     read -r -p "Open generated Confluence HTML in browser? [Y/n]: " OPEN_CHOICE
     OPEN_CHOICE="${OPEN_CHOICE:-Y}"
