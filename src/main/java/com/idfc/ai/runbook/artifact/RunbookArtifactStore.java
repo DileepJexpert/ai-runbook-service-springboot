@@ -1,0 +1,1 @@
+package com.idfc.ai.runbook.artifact; import java.nio.file.Path; import java.util.UUID; public interface RunbookArtifactStore { Path jobRoot(String serviceId,UUID jobId); void write(Path root,String relative,String content); String read(Path root,String relative); }

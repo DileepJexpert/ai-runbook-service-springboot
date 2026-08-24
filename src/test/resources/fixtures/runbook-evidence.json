@@ -1,0 +1,1 @@
+{"schemaVersion":"1.0","facts":[{"factId":"API:POST:/v1/payments","factType":"api","fact":"Payment API accepts requests.","sourceEvidence":[{"file":"src/main/java/PaymentController.java","lineStart":10,"lineEnd":20}],"confidence":"HIGH"}]}

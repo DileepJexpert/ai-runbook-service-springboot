@@ -1,0 +1,1 @@
+package com.idfc.ai.runbook.artifact; import java.util.*; public interface BaselineStore { Optional<String> loadLatestSuccessful(String service,String environment); void saveSuccessful(String service,String environment,String normalized); }

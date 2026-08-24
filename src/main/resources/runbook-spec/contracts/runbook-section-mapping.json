@@ -1,0 +1,6 @@
+{
+  "contractVersion": "2.1",
+  "destinations": {
+    "businessFlows": [3], "apis": [4], "requestFields": [4], "conditionalValidations": [4], "businessRules": [5], "responseMappings": [6], "errorCodes": [6], "dataLineage": [7], "transformations": [7], "configuration": [7], "states": [8], "stateTransitions": [8], "recoveryMechanisms": [8], "downstreamDependencies": [9], "databaseTables": [10], "aerospike": [10], "kafkaConsumers": [11], "kafkaProducers": [11], "resilience": [12], "rateLimits": [13], "capacityConstraints": [13], "retentionRules": [14], "idempotency": [15], "duplicateProtection": [15], "migrationRisks": [16], "featureFlags": [16], "logSignatures": [17], "configuredAlerts": [18], "supportHealthChecks": [18], "metrics": [18], "traceIdentifiers": [19], "unknownIncidentContext": [20], "escalationEvidence": [22], "pipeline": [23], "securityFindings": "RESTRICTED_SECURITY_ONLY", "testEvidence": "SEPARATE_ARTIFACT_ONLY", "architectureFacts": "SEPARATE_ARTIFACT_ONLY", "runbookDelta": "PIPELINE_ONLY", "generationReport": "PIPELINE_ONLY"
+  }
+}

@@ -1,0 +1,39 @@
+# Build outputs
+target/
+build/
+bin/
+out/
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+
+# Logs and OS artifacts
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets and environment files
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+application-local-secret.yml
+application-secret.yml
+
+# Runbook artifacts and test outputs
+runbook-artifacts/
+runbook-test-output/
+
+# Ensure bundled spec is included
+!src/main/resources/runbook-spec/

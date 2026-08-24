@@ -1,0 +1,3 @@
+# Support Safety Policy 2.1
+
+Generated support guidance must be strictly read-only. Support guidance must not authorize L1/L2 to initiate or trigger reconciliation, manually reprocess business transactions, replay or republish Kafka messages, alter offsets, update/delete production data, restart/scale workloads, change configuration or secrets, or force schedulers. It must not disclose credentials, tokens, private keys, personal data, or production payloads. For UNKNOWN or DEEMED transaction states, guidance must focus on inspecting state, external call attempts, and reconciliation evidence rather than initiating manual reconciliation. ServiceNow is the authoritative incident/RCA system.

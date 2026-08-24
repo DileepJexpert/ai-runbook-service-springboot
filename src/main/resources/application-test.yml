@@ -1,0 +1,11 @@
+runbook:
+  artifacts-root: ./target/test-artifacts
+  agent:
+    type: fake
+  confluence:
+    enabled: true
+  targets:
+    payments-service:
+      space-key: PROD-SUPPORT
+      test-page-id: "998"
+      production-page-id: "999"

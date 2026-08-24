@@ -1,0 +1,16 @@
+Service Intelligence extraction prompt 2.1
+
+Read the supplied extraction contract, platform context, configuration extraction policy, evidence policy, safety policy, quality expectations, and regulatory evidence policy.
+
+Analyze the TARGET REPOSITORY in a strictly read-only manner. Do NOT modify any files in the target repository.
+
+Generate and write EXACTLY the three AI-owned JSON artifacts into the requested output directory:
+1. `runbook-data.json`
+2. `runbook-evidence.json`
+3. `security-findings.json` (ALWAYS generate this artifact; if no findings exist, write a valid JSON object containing an empty findings array: {"contractVersion": "2.1", "findings": []})
+
+Writing these three artifacts into the assigned output directory is allowed and required.
+
+All generated Production Support guidance (supportCheck, supportAction, unknownIncidentContext, escalationEvidence) must be strictly READ-ONLY. Do not instruct Support to initiate manual reconciliation, replay Kafka events, alter offsets, mutate database records, force state transitions, force schedulers, or modify configuration. For UNKNOWN/DEEMED outcomes, instruct Support to inspect existing call attempt and reconciliation evidence, not to initiate reconciliation.
+
+Do NOT render documents (Markdown/Confluence HTML), calculate diffs, evaluate quality gates, publish, or disclose raw secret values.

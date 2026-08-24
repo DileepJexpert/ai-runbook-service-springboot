@@ -1,0 +1,9 @@
+runbook:
+  agent:
+    type: local
+  local-input:
+    # The file adapter is local-only and accepts each input path per job.
+    # Add POC roots here when starting the service with runbook.agent.type=file.
+    allowed-roots: []
+  confluence:
+    enabled: false

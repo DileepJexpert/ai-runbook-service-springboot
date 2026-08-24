@@ -1,0 +1,1 @@
+package com.idfc.ai.runbook.validation; import java.util.*; public record ValidationResult(boolean valid,List<String> errors){public static ValidationResult ok(){return new ValidationResult(true,List.of());}}

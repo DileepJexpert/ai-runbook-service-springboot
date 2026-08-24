@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["contractVersion", "schemaVersion", "generator", "pipeline", "service", "processingSummary"],
+  "properties": {
+    "contractVersion": {"enum": ["2.0", "2.1"]},
+    "schemaVersion": {"enum": ["2.0", "2.1"]},
+    "generator": {"type": "object", "additionalProperties": false, "required": ["promptVersion", "platformContextVersion", "scanStatus", "unscannedAreas"], "properties": {"promptVersion": {"type":"string"}, "platformContextVersion":{"type":"string"}, "scanStatus":{"enum":["COMPLETE","PARTIAL"]}, "unscannedAreas":{"type":"array","items":{"type":"object","additionalProperties":true,"required":["area"],"properties":{"area":{"type":"string"},"reason":{"type":"string"}}}}}},
+    "pipeline": {"type":"object", "additionalProperties": true},
+    "service": {"type":"object", "additionalProperties": false, "required":["name","businessPurpose","criticality","supportOwner","businessOwner","escalationChannel"], "properties":{"name":{"type":"string"},"businessPurpose":{"type":"string"},"criticality":{"type":"string"},"supportOwner":{"type":"string"},"businessOwner":{"type":"string"},"escalationChannel":{"type":"string"}}},
+    "processingSummary": {"type":"object"},
+    "idempotency": {"type":"object"},
+    "configuration": {"type":"array", "items":{"type":"object", "additionalProperties":true, "required":["propertyKey", "logicalPurpose", "runtimeValueStatus"], "properties":{"id":{"type":"string"},"componentId":{"type":"string"},"componentName":{"type":"string"},"modulePath":{"type":"string"},"deploymentUnit":{"type":"string"},"propertyKey":{"type":"string"},"configKey":{"type":"string"},"logicalPurpose":{"type":"string"},"repositoryValue":{"type":"string"},"repositoryDefault":{"type":"string"},"unit":{"type":"string"},"allowedValues":{"type":"array","items":{"type":"string"}},"valueSource":{"enum":["CODE","CODE_CONSTANT","CODE_DEFAULT","ANNOTATION","YAML","YAML_DEFAULT","PROPERTIES_FILE","ENV_PLACEHOLDER","HELM","KUBERNETES","CONFIGMAP_REFERENCE","SECRET_REFERENCE","CONFIG_PORTAL_REFERENCE","DATABASE_MIGRATION","BUILD_FILE","GENERATED_API_SPEC","TEST_SOURCE","HUMAN_METADATA","DERIVED_FROM_MULTIPLE_SOURCES","UNKNOWN"]},"runtimeValueStatus":{"enum":["KNOWN_FROM_REPOSITORY","REPOSITORY_DEFAULT","CHECK_CONFIG_PORTAL","PROTECTED_CHECK_CONFIG_PORTAL","RESOLVED_FROM_DEPLOYMENT_CONFIG","NOT_FOUND_IN_REPOSITORY","NOT_APPLICABLE","UNRESOLVED"]},"sensitive":{"type":"boolean"},"supportLookupInstruction":{"type":"string"},"confidence":{"enum":["HIGH","MEDIUM","LOW"]}}}},
+    "metrics": {"type":"array", "items":{"type":"object", "additionalProperties":true}},
+    "transactionBoundaries": {"type":"array", "items":{"type":"object", "additionalProperties":true}},
+    "testEvidence": {"type":"array", "items":{"type":"object", "additionalProperties":true}},
+    "architectureFacts": {"type":"array", "items":{"type":"object", "additionalProperties":true}}
+  },
+  "patternProperties": {
+    "^(businessFlows|businessRules|supportClassificationRules|apis|requestFields|conditionalValidations|responseMappings|errorCodes|referenceData|dataLineage|transformations|defaults|states|stateTransitions|sideEffects|recoveryMechanisms|databaseTables|aerospike|kafkaConsumers|kafkaProducers|downstreamDependencies|featureFlags|duplicateProtection|rateLimits|capacityConstraints|retentionRules|resilience|logSignatures|traceIdentifiers|configuredAlerts|supportHealthChecks|migrationRisks|unknownIncidentContext|escalationEvidence|unresolvedConfiguration)$": {"type":"array", "items":{"type":"object", "additionalProperties":true, "properties":{"id":{"type":"string", "minLength":1}, "stableId":{"type":"string", "minLength":1}, "timeoutMs":{"type":"integer", "minimum":0}, "access":{"enum":["READ","WRITE","READ_WRITE"]}}}}
+  }
+}

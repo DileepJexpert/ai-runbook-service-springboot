@@ -1,0 +1,4 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,
+  "required":["contractVersion","findings"],"properties":{"contractVersion":{"const":"2.1"},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","type","confidence","sourceEvidence"],"properties":{"id":{"type":"string"},"type":{"enum":["POTENTIAL_SENSITIVE_LOGGING_REVIEW","POTENTIAL_HARDCODED_SECRET","POTENTIAL_AUTHORIZATION_REVIEW","POTENTIAL_TLS_REVIEW"]},"confidence":{"enum":["HIGH","MEDIUM","LOW"]},"sourceEvidence":{"type":"array","minItems":1,"items":{"type":"object","required":["file","lineStart","lineEnd"],"properties":{"file":{"type":"string"},"lineStart":{"type":"integer"},"lineEnd":{"type":"integer"}}}}}}}}
+}

@@ -1,0 +1,3 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true,
+  "required":["contractVersion","schemaVersion","promptVersion","promptFingerprint","platformContextVersion","serviceId","jobId","scanStatus","qualityGate","publishEligible","factCounts","confidenceCounts","unresolvedRuntimeConfigurationCount","artifactPaths","artifactSha256"],"properties":{"contractVersion":{"const":"2.1"},"qualityGate":{"enum":["PASS","PASS_WITH_WARNINGS","RENDER_ALLOWED_PUBLISH_BLOCKED","FAILED"]},"publishEligible":{"type":"boolean"},"scanStatus":{"enum":["COMPLETE","PARTIAL"]},"promptFingerprint":{"pattern":"^[a-f0-9]{64}$"},"unresolvedRuntimeConfigurationCount":{"type":"integer","minimum":0}}}

@@ -1,0 +1,12 @@
+{
+  "contractVersion": "2.0",
+  "schemaVersion": "2.0",
+  "generator": {"promptVersion": "2.0", "platformContextVersion": "1.0", "scanStatus": "COMPLETE", "unscannedAreas": []},
+  "pipeline": {"serviceName": "example-service", "generatedAt": "2026-01-01T00:00:00Z"},
+  "service": {"name": "example-service", "businessPurpose": "Accept example requests", "criticality": "HIGH", "supportOwner": "Platform", "businessOwner": "Business", "escalationChannel": "#support"},
+  "processingSummary": {"summary": "Synchronous request acceptance."},
+  "apis": [{"id": "API:POST:/v1/customer", "method": "post", "path": "/v1/customer", "timeout": "5s"}],
+  "businessRules": [{"id":"RULE:example", "flowId":"FLOW:create", "condition":"customer type is active", "result":"accepted"}],
+  "databaseTables": [{"id":"DB_TABLE:public:customer", "schema":"public", "table":"customer", "access":"READ"}],
+  "kafkaConsumers": [], "kafkaProducers": [], "downstreamDependencies": [], "featureFlags": [], "retentionRules": [], "rateLimits": [], "resilience": [], "logSignatures": [], "traceIdentifiers": [], "configuredAlerts": [], "supportHealthChecks": [], "migrationRisks": [], "duplicateProtection": [], "stateTransitions": [], "dataLineage": [], "responseMappings": [], "businessFlows": [], "escalationEvidence": [], "unknownIncidentContext": [], "idempotency": {}
+}

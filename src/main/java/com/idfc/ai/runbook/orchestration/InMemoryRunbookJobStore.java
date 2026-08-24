@@ -1,0 +1,2 @@
+package com.idfc.ai.runbook.orchestration; import java.util.*; import java.util.concurrent.*; import org.springframework.stereotype.Repository;
+@Repository public class InMemoryRunbookJobStore implements RunbookJobStore { private final Map<UUID,RunbookJob> jobs=new ConcurrentHashMap<>(); public RunbookJob save(RunbookJob j){jobs.put(j.id,j);return j;} public Optional<RunbookJob> get(UUID id){return Optional.ofNullable(jobs.get(id));} }

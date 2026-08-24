@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: ai-runbook-service
+  profiles:
+    default: local
+runbook:
+  enabled: true
+  artifacts-root: ./build/runbook-artifacts
+  agent:
+    type: local
+    executable: idfc-coder
+    timeout: 30m
+    max-captured-log-bytes: 1048576
+  executor:
+    core-pool-size: 2
+    max-pool-size: 4
+    queue-capacity: 20
+  validation:
+    require-complete-scan-for-production: true
+    minimum-rendered-bytes: 2000
+  confluence:
+    enabled: false
+    protected-page-ids: []
+  targets: {}

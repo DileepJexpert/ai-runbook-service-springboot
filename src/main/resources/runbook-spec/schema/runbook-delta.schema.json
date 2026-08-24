@@ -1,0 +1,4 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,
+  "required":["contractVersion","previousBaselineIdentity","currentIdentity","hasOperationalChanges","changedSections","changes"],"properties":{"contractVersion":{"const":"2.1"},"previousBaselineIdentity":{"type":["object","null"]},"currentIdentity":{"type":"object"},"hasOperationalChanges":{"type":"boolean"},"changedSections":{"type":"array","items":{"type":"integer","minimum":1,"maximum":23}},"changes":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["type","entityType","entityId","field","classification","sectionIds"],"properties":{"type":{"enum":["ADDED","REMOVED","MODIFIED"]},"entityType":{"type":"string"},"entityId":{"type":"string"},"field":{"type":"string"},"oldValue":{},"newValue":{},"classification":{"type":"string"},"sectionIds":{"type":"array","items":{"type":"integer","minimum":1,"maximum":23}}}}}}
+}

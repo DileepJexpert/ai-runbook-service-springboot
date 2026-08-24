@@ -1,0 +1,6 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema", "type":"object", "additionalProperties":false,
+  "required":["schemaVersion","facts"], "properties":{
+    "schemaVersion":{"enum":["1.0","2.1"]}, "facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["factId","factType","fact","sourceEvidence","confidence"],"properties":{"factId":{"type":"string","minLength":1},"factType":{"type":"string","minLength":1},"fact":{"type":"string","minLength":1},"provenance":{"enum":["CODE","CODE_CONSTANT","CODE_DEFAULT","ANNOTATION","YAML","YAML_DEFAULT","PROPERTIES_FILE","ENV_PLACEHOLDER","HELM","KUBERNETES","CONFIGMAP_REFERENCE","SECRET_REFERENCE","CONFIG_PORTAL_REFERENCE","DATABASE_MIGRATION","BUILD_FILE","GENERATED_API_SPEC","TEST_SOURCE","HUMAN_METADATA","DERIVED_FROM_MULTIPLE_SOURCES","UNKNOWN"]},"confidence":{"enum":["HIGH","MEDIUM","LOW"]},"sourceEvidence":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["file","lineStart","lineEnd"],"properties":{"file":{"type":"string","minLength":1},"lineStart":{"type":"integer","minimum":1},"lineEnd":{"type":"integer","minimum":1}}}}}}}
+  }
+}

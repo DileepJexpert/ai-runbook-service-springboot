@@ -1,0 +1,2 @@
+package com.idfc.ai.runbook.confluence; import com.idfc.ai.runbook.config.RunbookProperties; import org.springframework.stereotype.Component;
+@Component public class ConfigRunbookTargetRegistry implements RunbookTargetRegistry { private final RunbookProperties p; public ConfigRunbookTargetRegistry(RunbookProperties p){this.p=p;} public RunbookProperties.Target target(String s){var t=p.getTargets().get(s);if(t==null)throw new IllegalArgumentException("RUNBOOK_TARGET_NOT_CONFIGURED");return t;} }

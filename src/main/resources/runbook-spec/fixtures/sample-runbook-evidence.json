@@ -1,0 +1,8 @@
+{
+  "schemaVersion":"1.0",
+  "facts":[
+    {"factId":"API:POST:/v1/customer","factType":"api","fact":"Customer API accepts requests.","sourceEvidence":[{"file":"src/main/java/CustomerController.java","lineStart":10,"lineEnd":20}],"confidence":"HIGH"},
+    {"factId":"RULE:example","factType":"businessRule","fact":"Customer type must be active.","sourceEvidence":[{"file":"src/main/java/CustomerService.java","lineStart":30,"lineEnd":35}],"confidence":"HIGH"},
+    {"factId":"DB_TABLE:public:customer","factType":"database","fact":"Customer table is read.","sourceEvidence":[{"file":"src/main/java/CustomerRepository.java","lineStart":8,"lineEnd":12}],"confidence":"MEDIUM"}
+  ]
+}
