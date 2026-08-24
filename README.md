@@ -50,7 +50,8 @@ The script automatically:
 
 Ensure the following tools are installed and available on your PATH:
 
-- **Java**: Java 21 LTS or newer
+- **Java**: Java 25 LTS or compatible
+- **Spring Boot**: 3.5.15
 - **Maven**: Apache Maven 3.9+
 - **Git**: Git 2.30+
 - **idfc-coder**: Local CLI extraction binary (*required only when using default `runbook.agent.type=local`*)
