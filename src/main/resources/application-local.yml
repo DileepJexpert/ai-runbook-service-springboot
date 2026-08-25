@@ -11,6 +11,10 @@ runbook:
     request-timeout-seconds: ${RUNBOOK_AI_REQUEST_TIMEOUT_SECONDS:900}
     max-tokens: ${RUNBOOK_AI_MAX_TOKENS:12000}
     temperature: 0.0
+  collection:
+    max-files: 120
+    max-total-characters: 300000
+    max-file-characters: 20000
   agent:
     type: local
   local-input:
