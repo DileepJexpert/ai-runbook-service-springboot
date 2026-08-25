@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.idfc.ai.runbook.config.RunbookProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -18,7 +17,6 @@ import java.util.List;
 import java.util.Map;
 
 @Component
-@ConditionalOnMissingBean(type = "com.idfc.ai.runbook.client.RunbookAiClient")
 public class HttpRunbookAiClient implements RunbookAiClient {
   private static final Logger log = LoggerFactory.getLogger(HttpRunbookAiClient.class);
 
