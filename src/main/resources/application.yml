@@ -7,7 +7,7 @@ runbook:
   enabled: true
   artifacts-root: ./build/runbook-artifacts
   generation:
-    mode: LEAN
+    mode: DIRECT_STRUCTURED
   ai:
     base-url: ${RUNBOOK_AI_BASE_URL:}
     auth-url: ${RUNBOOK_AI_AUTH_URL:}

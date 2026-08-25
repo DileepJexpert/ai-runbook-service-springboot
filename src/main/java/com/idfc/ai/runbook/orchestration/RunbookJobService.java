@@ -2,6 +2,7 @@ package com.idfc.ai.runbook.orchestration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.idfc.ai.runbook.agent.*;
 import com.idfc.ai.runbook.api.dto.*;
 import com.idfc.ai.runbook.artifact.*;
@@ -49,9 +50,10 @@ public class RunbookJobService {
   private final RunbookProperties properties;
   private final TaskExecutor executor;
 
-  // LEAN mode components
+  // AI execution components
   private final RepositoryContextCollector collector;
   private final LeanRunbookPromptBuilder leanPromptBuilder;
+  private final DirectStructuredRunbookPromptBuilder directStructuredPromptBuilder;
   private final RunbookAiClient aiClient;
   private final LeanMarkdownToHtmlConverter markdownToHtml;
   private final LeanRunbookValidator leanValidator;
@@ -77,6 +79,7 @@ public class RunbookJobService {
       RunbookProperties properties,
       RepositoryContextCollector collector,
       LeanRunbookPromptBuilder leanPromptBuilder,
+      DirectStructuredRunbookPromptBuilder directStructuredPromptBuilder,
       RunbookAiClient aiClient,
       LeanMarkdownToHtmlConverter markdownToHtml,
       LeanRunbookValidator leanValidator
@@ -101,6 +104,7 @@ public class RunbookJobService {
     this.properties = properties;
     this.collector = collector;
     this.leanPromptBuilder = leanPromptBuilder;
+    this.directStructuredPromptBuilder = directStructuredPromptBuilder;
     this.aiClient = aiClient;
     this.markdownToHtml = markdownToHtml;
     this.leanValidator = leanValidator;
@@ -137,10 +141,15 @@ public class RunbookJobService {
 
   private void run(RunbookJob job) {
     try {
-      if (properties.getGeneration().isLean() && job.extractionInput == null) {
-        runLean(job);
-      } else {
+      if (job.extractionInput != null && "PREGENERATED_FILES".equalsIgnoreCase(job.extractionInput.mode())) {
         runStructured(job);
+      } else if (properties.getGeneration().isLean()) {
+        runLean(job);
+      } else if (properties.getGeneration().isStructured()) {
+        runStructured(job);
+      } else {
+        // DIRECT_STRUCTURED is the default deterministic HYBRID mode
+        runDirectStructured(job);
       }
     } catch (Exception exception) {
       String failureCode = code(exception);
@@ -149,6 +158,180 @@ public class RunbookJobService {
       log.error("jobId={} serviceId={} status=FAILED failureCode={} message={}", job.id, job.serviceId, failureCode, failureMessage, exception);
     }
   }
+
+  private void runDirectStructured(RunbookJob job) throws Exception {
+    transition(job, RunbookJobState.PREPARING_WORKSPACE);
+    var checkout = workspace.prepare(job.repo, job.requestedCommit);
+    if (job.requestedCommit == null || job.requestedCommit.isBlank()) {
+      job.requestedCommit = checkout.commitSha();
+    }
+    Path root = artifacts.jobRoot(job.serviceId, job.id);
+    job.artifacts.put("root", root.toString());
+
+    transition(job, RunbookJobState.EXTRACTING);
+    var contextResult = collector.collect(checkout.path());
+    log.info("jobId={} serviceId={} collectedFiles={} contextChars={}",
+        job.id, job.serviceId, contextResult.filesIncluded(), contextResult.totalCharacters());
+
+    String promptText = directStructuredPromptBuilder.buildPrompt(
+        job.serviceId,
+        checkout.mode(),
+        checkout.url(),
+        checkout.branch(),
+        checkout.commitSha(),
+        contextResult.contextText()
+    );
+
+    log.info("jobId={} serviceId={} calling direct AI client for structured extraction", job.id, job.serviceId);
+    String rawResponse = aiClient.generate(promptText);
+
+    DirectStructuredExtractionResult extraction = parseStructuredEnvelope(rawResponse, job.serviceId, checkout.commitSha());
+
+    artifacts.write(root, "extraction/runbook-data.json", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(extraction.runbookData()));
+    artifacts.write(root, "extraction/runbook-evidence.json", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(extraction.runbookEvidence()));
+    artifacts.write(root, "extraction/security-findings.json", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(extraction.securityFindings()));
+
+    JsonNode data = extraction.runbookData();
+    JsonNode ev = extraction.runbookEvidence();
+
+    String extractedCommit = data.path("pipeline").path("gitCommitSha").asText();
+    if (!extractedCommit.isBlank() && !"fixture".equalsIgnoreCase(extractedCommit) && job.requestedCommit != null && !job.requestedCommit.isBlank()) {
+      if (!extractedCommit.equalsIgnoreCase(job.requestedCommit) && !extractedCommit.startsWith(job.requestedCommit) && !job.requestedCommit.startsWith(extractedCommit)) {
+        throw new IllegalArgumentException("RUNBOOK_COMMIT_MISMATCH: extracted commit " + extractedCommit + " does not match requested " + job.requestedCommit);
+      }
+    }
+    job.analyzedCommit = !extractedCommit.isBlank() ? extractedCommit : checkout.commitSha();
+
+    transition(job, RunbookJobState.VALIDATING);
+    ValidationResult schemaResult = schema.validate(data, ev);
+    ValidationResult safetyResult = safety.validate(data);
+    ValidationResult evidenceResult = evidence.validate(ev);
+
+    List<String> errors = new ArrayList<>();
+    errors.addAll(schemaResult.errors());
+    errors.addAll(safetyResult.errors());
+    errors.addAll(evidenceResult.errors());
+
+    boolean schemaValid = schemaResult.valid() && evidenceResult.valid();
+    log.info("jobId={} serviceId={} schemaValidation={}", job.id, job.serviceId, schemaValid ? "PASS" : "FAIL");
+
+    QualityGateDecision gate = quality.evaluate(data, errors);
+    artifacts.write(root, "validation/validation-report.json", mapper.writeValueAsString(Map.of(
+        "valid", errors.isEmpty(),
+        "errors", errors,
+        "qualityGate", gate.outcome()
+    )));
+
+    if (!errors.isEmpty()) {
+      String primaryCode = !schemaResult.valid() ? "RUNBOOK_SCHEMA_INVALID" : (!safetyResult.valid() ? "SAFETY_POLICY_VIOLATION" : "RUNBOOK_SCHEMA_INVALID");
+      throw new IllegalArgumentException(primaryCode + ": " + String.join(",", errors));
+    }
+
+    transition(job, RunbookJobState.NORMALIZING);
+    JsonNode normalized = normalizer.normalize(data);
+    artifacts.write(root, "normalized/normalized-runbook-data.json", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(normalized));
+
+    transition(job, RunbookJobState.DIFFING);
+    JsonNode previous = baseline.loadLatestSuccessful(job.serviceId, job.environment).map(this::json).orElse(null);
+    OperationalDiff delta = comparator.compare(normalized, previous);
+    job.operationalChange = delta.hasOperationalChanges();
+    job.changedSections.addAll(delta.changedSections());
+    artifacts.write(root, "diff/operational-diff.json", mapper.writeValueAsString(delta));
+    artifacts.write(root, "diff/runbook-delta.json", mapper.writeValueAsString(RunbookDeltaArtifact.create(previous == null ? null : job.serviceId + ":" + job.environment, job.serviceId + ":" + job.analyzedCommit, delta)));
+
+    if (!delta.hasOperationalChanges()) {
+      renderSupplemental(root, normalized, delta);
+      report(root, job, data, gate);
+      transition(job, RunbookJobState.NO_OPERATIONAL_CHANGE);
+      return;
+    }
+
+    transition(job, RunbookJobState.RENDERING);
+    artifacts.write(root, "render/RUNBOOK.md", markdown.render(normalized));
+    artifacts.write(root, "render/confluence-body.html", html.render(normalized));
+    renderSupplemental(root, normalized, delta);
+    report(root, job, data, gate);
+    transition(job, gate.publishEligible() ? RunbookJobState.READY_TO_PUBLISH : RunbookJobState.RENDERED_PUBLISH_BLOCKED);
+  }
+
+  public DirectStructuredExtractionResult parseStructuredEnvelope(String rawResponse, String serviceId, String commitSha) {
+    if (rawResponse == null || rawResponse.isBlank()) {
+      throw new IllegalArgumentException("RUNBOOK_AI_OUTPUT_INVALID: AI client returned empty response");
+    }
+
+    String cleaned = rawResponse.trim();
+    if (cleaned.startsWith("```")) {
+      int firstNewLine = cleaned.indexOf('\n');
+      int lastFence = cleaned.lastIndexOf("```");
+      if (firstNewLine != -1 && lastFence > firstNewLine) {
+        cleaned = cleaned.substring(firstNewLine + 1, lastFence).trim();
+      }
+    }
+
+    JsonNode root;
+    try {
+      root = mapper.readTree(cleaned);
+    } catch (Exception e) {
+      throw new IllegalArgumentException("RUNBOOK_AI_OUTPUT_INVALID: Malformed JSON response: " + e.getMessage(), e);
+    }
+
+    if (!root.isObject()) {
+      throw new IllegalArgumentException("RUNBOOK_AI_OUTPUT_INVALID: Response must be a JSON object envelope");
+    }
+
+    if (!root.hasNonNull("runbookData")) {
+      throw new IllegalArgumentException("RUNBOOK_AI_OUTPUT_INVALID: Envelope is missing 'runbookData'");
+    }
+    if (!root.hasNonNull("runbookEvidence")) {
+      throw new IllegalArgumentException("RUNBOOK_AI_OUTPUT_INVALID: Envelope is missing 'runbookEvidence'");
+    }
+    if (!root.hasNonNull("securityFindings")) {
+      throw new IllegalArgumentException("RUNBOOK_AI_OUTPUT_INVALID: Envelope is missing 'securityFindings'");
+    }
+
+    JsonNode data = root.get("runbookData");
+    JsonNode ev = root.get("runbookEvidence");
+    JsonNode sec = root.get("securityFindings");
+
+    if (!data.isObject() || !ev.isObject() || !sec.isObject()) {
+      throw new IllegalArgumentException("RUNBOOK_AI_OUTPUT_INVALID: Envelope elements must be JSON objects");
+    }
+
+    // Ensure service name and commit are populated if omitted by model
+    if (data instanceof ObjectNode dataObj) {
+      if (!dataObj.hasNonNull("service") || !dataObj.get("service").isObject()) {
+        ObjectNode serviceObj = mapper.createObjectNode();
+        serviceObj.put("name", serviceId);
+        serviceObj.put("businessPurpose", serviceId);
+        serviceObj.put("criticality", "HIGH");
+        dataObj.set("service", serviceObj);
+      } else {
+        ObjectNode serviceObj = (ObjectNode) dataObj.get("service");
+        if (!serviceObj.hasNonNull("name") || serviceObj.get("name").asText().isBlank() || serviceObj.get("name").asText().contains("<SERVICE_NAME>")) {
+          serviceObj.put("name", serviceId);
+        }
+      }
+
+      if (!dataObj.hasNonNull("pipeline") || !dataObj.get("pipeline").isObject()) {
+        ObjectNode pipelineObj = mapper.createObjectNode();
+        pipelineObj.put("gitCommitSha", commitSha != null ? commitSha : "HEAD");
+        dataObj.set("pipeline", pipelineObj);
+      } else {
+        ObjectNode pipelineObj = (ObjectNode) dataObj.get("pipeline");
+        if (!pipelineObj.hasNonNull("gitCommitSha") || pipelineObj.get("gitCommitSha").asText().isBlank()) {
+          pipelineObj.put("gitCommitSha", commitSha != null ? commitSha : "HEAD");
+        }
+      }
+    }
+
+    return new DirectStructuredExtractionResult(data, ev, sec);
+  }
+
+  public record DirectStructuredExtractionResult(
+      JsonNode runbookData,
+      JsonNode runbookEvidence,
+      JsonNode securityFindings
+  ) {}
 
   private void runLean(RunbookJob job) {
     transition(job, RunbookJobState.PREPARING_WORKSPACE);

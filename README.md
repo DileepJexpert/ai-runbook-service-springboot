@@ -1,27 +1,34 @@
 # AI Runbook Service - Local Run Guide
 
-A self-contained Spring Boot service that generates authoritative, 23-section Production Support Runbooks for IDFC microservices using a fast, deterministic LEAN generation pipeline connected to the corporate LLM.
+A self-contained Spring Boot service that generates authoritative, 23-section Production Support Runbooks for IDFC microservices using a hybrid deterministic generation pipeline connected directly to the corporate LLM HTTP API.
 
 ```text
 Repository (Bitbucket / Local Path)
   ↓
 Java Context Collection (RepositoryContextCollector)
   ↓
-Corporate Auth & Direct LLM API (RunbookAiClient)
+Direct Corporate LLM Structured Extraction (1 Call: RunbookAiClient)
   ↓
-Markdown Runbook (render/RUNBOOK.md)
+Canonical Structured Extraction Files:
+  - extraction/runbook-data.json
+  - extraction/runbook-evidence.json
+  - extraction/security-findings.json
   ↓
-Lightweight Validation (23 sections, safety, secrets)
+Deterministic Java Validation (Schema, Evidence, Safety)
   ↓
-Confluence HTML (render/confluence-body.html)
+Deterministic Java Normalization & SectionFactMapper
+  ↓
+Deterministic Java 23-Section Renderer
+  - render/RUNBOOK.md
+  - render/confluence-body.html
   ↓
 READY_TO_PUBLISH
 ```
 
 ### LOCAL / TEST AI EXECUTION
 
-The runbook application calls the corporate LLM HTTP API directly.
-`idfc-coder` is not required and is not invoked by LEAN mode.
+The runbook application calls the corporate LLM HTTP API directly using token-based OAuth authentication.
+**`idfc-coder` is not required and is not used by normal runtime.**
 
 ---
 
@@ -69,9 +76,17 @@ Follow the interactive prompts:
 3. Press Enter for default branch / auto-derived Service ID.
 
 ### Expected Result:
-Generated runbook files are written to:
-- Markdown Runbook: `build/runbook-artifacts/<serviceId>/<jobId>/render/RUNBOOK.md`
-- Confluence HTML: `build/runbook-artifacts/<serviceId>/<jobId>/render/confluence-body.html`
+Generated runbook artifacts are written to `build/runbook-artifacts/<serviceId>/<jobId>/`:
+- Structured Extraction:
+  - `extraction/runbook-data.json`
+  - `extraction/runbook-evidence.json`
+  - `extraction/security-findings.json`
+- Validation & Normalization:
+  - `validation/validation-report.json`
+  - `normalized/normalized-runbook-data.json`
+- Rendered Runbook:
+  - Markdown Runbook: `render/RUNBOOK.md`
+  - Confluence HTML: `render/confluence-body.html`
 
 ---
 

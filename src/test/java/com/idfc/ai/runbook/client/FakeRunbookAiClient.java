@@ -11,6 +11,155 @@ import java.util.regex.Pattern;
 @TestConfiguration
 public class FakeRunbookAiClient {
 
+  public static final String VALID_STRUCTURED_ENVELOPE_JSON = """
+      {
+        "runbookData": {
+          "contractVersion": "2.1",
+          "schemaVersion": "2.1",
+          "generator": {
+            "promptVersion": "2.1",
+            "platformContextVersion": "1.0",
+            "scanStatus": "COMPLETE",
+            "unscannedAreas": []
+          },
+          "pipeline": {
+            "serviceName": "payments-service",
+            "gitCommitSha": "fixture"
+          },
+          "service": {
+            "name": "payments-service",
+            "businessPurpose": "Payments Processing Service",
+            "criticality": "HIGH",
+            "supportOwner": "Platform Support",
+            "businessOwner": "Payments Team",
+            "escalationChannel": "#payments-support"
+          },
+          "processingSummary": {
+            "summary": "Handles payment transactions, limits checking, and downstream CBS integration."
+          },
+          "apis": [
+            {
+              "id": "API:POST:/v1/payments",
+              "method": "POST",
+              "path": "/v1/payments",
+              "timeout": "5 seconds"
+            }
+          ],
+          "businessRules": [
+            {
+              "flowId": "FLOW:PAYMENT_PROCESSING",
+              "sourceFile": "PaymentService.java",
+              "method": "processPayment",
+              "condition": "amount > 500000",
+              "action": "Reject transaction with PAY_4001",
+              "supportCheck": "Verify customer daily limit"
+            }
+          ],
+          "databaseTables": [
+            {
+              "table": "payments",
+              "schema": "public",
+              "access": "READ_WRITE",
+              "lookupKey": "payment_id",
+              "supportFields": ["status", "updated_at"],
+              "operationalPurpose": "Tracks transaction state."
+            }
+          ],
+          "kafkaConsumers": [],
+          "kafkaProducers": [
+            {
+              "topic": "payment-events",
+              "purpose": "Publishes completed payment events"
+            }
+          ],
+          "downstreamDependencies": [
+            {
+              "name": "CBS",
+              "purpose": "Core Banking System",
+              "timeout": "2000ms",
+              "failureHandling": "retry twice",
+              "failurePropagation": "503 Service Unavailable",
+              "supportCheck": "Check CBS health"
+            }
+          ],
+          "featureFlags": [],
+          "retentionRules": [],
+          "rateLimits": [],
+          "resilience": [
+            {
+              "component": "CBS Client",
+              "mechanism": "CircuitBreaker",
+              "failureHandling": "Fallback to queue"
+            }
+          ],
+          "logSignatures": [
+            {
+              "signature": "DB_CONN_TIMEOUT",
+              "possibleCauses": "Connection pool exhausted",
+              "howToConfirm": "Check HikariCP active connections",
+              "supportAction": "Review database connection load"
+            }
+          ],
+          "traceIdentifiers": [],
+          "configuredAlerts": [],
+          "migrationRisks": [],
+          "duplicateProtection": [],
+          "stateTransitions": [
+            {
+              "fromState": "INITIATED",
+              "toState": "COMPLETED",
+              "trigger": "CBS authorization success",
+              "recoveryAction": "None required"
+            }
+          ],
+          "dataLineage": [],
+          "responseMappings": [
+            {
+              "errorCode": "PAY_4001",
+              "result": "Payment Rejected",
+              "possibleCauses": "Daily limit exceeded",
+              "howToConfirm": "Check customer ledger",
+              "supportAction": "Advise customer to raise limit"
+            }
+          ],
+          "businessFlows": [
+            {
+              "id": "FLOW:PAYMENT_PROCESSING",
+              "name": "Payment Authorization Flow",
+              "trigger": "HTTP POST /v1/payments",
+              "outcome": "Payment authorized or rejected"
+            }
+          ],
+          "escalationEvidence": [],
+          "unknownIncidentContext": []
+        },
+        "runbookEvidence": {
+          "contractVersion": "2.1",
+          "schemaVersion": "2.1",
+          "facts": [
+            {
+              "factId": "API:POST:/v1/payments",
+              "factType": "api",
+              "fact": "Payment API accepts HTTP requests.",
+              "sourceEvidence": [
+                {
+                  "file": "src/main/java/PaymentController.java",
+                  "lineStart": 10,
+                  "lineEnd": 20
+                }
+              ],
+              "confidence": "HIGH"
+            }
+          ]
+        },
+        "securityFindings": {
+          "contractVersion": "2.1",
+          "schemaVersion": "2.1",
+          "findings": []
+        }
+      }
+      """;
+
   public static final String VALID_SAMPLE_RUNBOOK_MD = """
       # Production Support Runbook — payments-service
 
@@ -110,6 +259,18 @@ public class FakeRunbookAiClient {
       Matcher m = Pattern.compile("- Service ID:\\s*([\\w.\\-]+)").matcher(prompt);
       if (m.find()) {
         serviceId = m.group(1).trim();
+      }
+
+      String commitSha = "fixture";
+      Matcher cm = Pattern.compile("- Analyzed Git Commit SHA:\\s*([\\w.\\-]+)").matcher(prompt);
+      if (cm.find()) {
+        commitSha = cm.group(1).trim();
+      }
+
+      if (prompt.contains("runbookData") || prompt.contains("OUTPUT FORMAT CONTRACT")) {
+        return VALID_STRUCTURED_ENVELOPE_JSON
+            .replace("payments-service", serviceId)
+            .replace("\"fixture\"", "\"" + commitSha + "\"");
       }
       return VALID_SAMPLE_RUNBOOK_MD.replace("payments-service", serviceId);
     };

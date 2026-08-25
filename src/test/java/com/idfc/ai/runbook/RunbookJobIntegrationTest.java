@@ -1,11 +1,7 @@
 package com.idfc.ai.runbook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.idfc.ai.runbook.agent.FakeIdfcCoderExecutor;
-import com.idfc.ai.runbook.agent.IdfcCoderExecutor;
-import com.idfc.ai.runbook.agent.IdfcCoderResult;
-import com.idfc.ai.runbook.agent.LeanRunbookPromptBuilder;
-import com.idfc.ai.runbook.agent.RunbookPromptBuilder;
+import com.idfc.ai.runbook.agent.*;
 import com.idfc.ai.runbook.api.dto.CreateJobRequest;
 import com.idfc.ai.runbook.api.dto.PublishRequest;
 import com.idfc.ai.runbook.artifact.BaselineStore;
@@ -74,16 +70,17 @@ class RunbookJobIntegrationTest {
 
   @Autowired RepositoryContextCollector collector;
   @Autowired LeanRunbookPromptBuilder leanPromptBuilder;
+  @Autowired DirectStructuredRunbookPromptBuilder directStructuredPromptBuilder;
   @Autowired RunbookAiClient aiClient;
   @Autowired LeanMarkdownToHtmlConverter markdownToHtml;
   @Autowired LeanRunbookValidator leanValidator;
 
-  @Test void default_mode_is_lean_in_properties() {
-    assertThat(properties.getGeneration().getMode()).isEqualTo("LEAN");
-    assertThat(properties.getGeneration().isLean()).isTrue();
+  @Test void default_mode_is_direct_structured_in_properties() {
+    assertThat(properties.getGeneration().getMode()).isEqualTo("DIRECT_STRUCTURED");
+    assertThat(properties.getGeneration().isDirectStructured()).isTrue();
   }
 
-  @Test void lean_mode_local_path_generates_and_publishes() throws Exception {
+  @Test void direct_structured_mode_local_path_generates_and_publishes() throws Exception {
     Files.deleteIfExists(Path.of("target", "test-artifacts", "baselines", "payments-service-TEST.json"));
     String repo = temporaryGitRepository();
     String sha = git(repo);
@@ -94,16 +91,24 @@ class RunbookJobIntegrationTest {
     assertThat(job.artifacts).containsKey("root");
     Path root = Path.of(job.artifacts.get("root"));
     assertThat(root).isDirectory();
+    assertThat(root.resolve("extraction/runbook-data.json")).isRegularFile();
+    assertThat(root.resolve("extraction/runbook-evidence.json")).isRegularFile();
+    assertThat(root.resolve("extraction/security-findings.json")).isRegularFile();
+    assertThat(root.resolve("normalized/normalized-runbook-data.json")).isRegularFile();
     assertThat(root.resolve("render/RUNBOOK.md")).isRegularFile();
     assertThat(root.resolve("render/confluence-body.html")).isRegularFile();
-    // LEAN mode does not create structured intermediate files
-    assertThat(root.resolve("extraction/runbook-data.json")).doesNotExist();
+
+    // Verify 23 sections rendered deterministically in RUNBOOK.md
+    String markdownContent = Files.readString(root.resolve("render/RUNBOOK.md"));
+    for (var section : com.idfc.ai.runbook.rendering.RunbookSection.values()) {
+      assertThat(markdownContent).contains("## " + section.heading);
+    }
 
     service.publish(job.id, new PublishRequest("TEST", sha, "payments:1.0"));
     assertThat(job.state).isEqualTo(RunbookJobState.PUBLISHED);
   }
 
-  @Test void lean_mode_bitbucket_generates_runbook_using_remote_resolution() throws Exception {
+  @Test void direct_structured_mode_bitbucket_generates_runbook_using_remote_resolution() throws Exception {
     when(remoteGitResolver.resolveRemoteHead(eq("https://bitbucket.bank.local/scm/pay/payments.git"), eq("develop"))).thenReturn("develop-head-sha-9999");
 
     var request = new CreateJobRequest(
@@ -118,66 +123,69 @@ class RunbookJobIntegrationTest {
     assertThat(job.requestedCommit).isEqualTo("develop-head-sha-9999");
     assertThat(job.artifacts).containsKey("root");
     Path root = Path.of(job.artifacts.get("root"));
+    assertThat(root.resolve("extraction/runbook-data.json")).isRegularFile();
+    assertThat(root.resolve("extraction/runbook-evidence.json")).isRegularFile();
+    assertThat(root.resolve("extraction/security-findings.json")).isRegularFile();
     assertThat(root.resolve("render/RUNBOOK.md")).isRegularFile();
     assertThat(root.resolve("render/confluence-body.html")).isRegularFile();
   }
 
   @Test
-  void lean_mode_does_not_invoke_idfc_coder_executor() throws Exception {
+  void direct_structured_mode_does_not_invoke_idfc_coder_executor() throws Exception {
     AtomicInteger agentCalls = new AtomicInteger(0);
     IdfcCoderExecutor spyAgent = request -> {
       agentCalls.incrementAndGet();
       return new IdfcCoderResult("unexpected call", "");
     };
 
-    RunbookProperties leanProps = new RunbookProperties();
-    leanProps.getGeneration().setMode("LEAN");
+    RunbookProperties directStructuredProps = new RunbookProperties();
+    directStructuredProps.getGeneration().setMode("DIRECT_STRUCTURED");
 
-    RunbookJobService leanService = new RunbookJobService(
+    RunbookJobService directService = new RunbookJobService(
         jobs, workspace, spyAgent, prompt, artifacts, baseline,
         schema, safety, evidence, normalizer, comparator, markdown, html,
-        supplemental, publisher, quality, mapper, leanProps,
-        collector, leanPromptBuilder, aiClient, markdownToHtml, leanValidator
+        supplemental, publisher, quality, mapper, directStructuredProps,
+        collector, leanPromptBuilder, directStructuredPromptBuilder, aiClient, markdownToHtml, leanValidator
     );
 
     String repo = temporaryGitRepository();
     String sha = git(repo);
-    var request = new CreateJobRequest("lean-no-agent-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+    var request = new CreateJobRequest("direct-no-agent-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
 
-    RunbookJob job = leanService.create(request);
+    RunbookJob job = directService.create(request);
     for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
 
     assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
-    // Verified: idfc-coder executor is NEVER called in LEAN mode
+    // Verified: idfc-coder executor is NEVER called in DIRECT_STRUCTURED mode
     assertThat(agentCalls.get()).isEqualTo(0);
   }
 
   @Test
-  void missing_idfc_coder_binary_does_not_affect_lean_mode() throws Exception {
-    RunbookProperties leanProps = new RunbookProperties();
-    leanProps.getGeneration().setMode("LEAN");
+  void missing_idfc_coder_binary_does_not_affect_direct_structured_mode() throws Exception {
+    RunbookProperties directProps = new RunbookProperties();
+    directProps.getGeneration().setMode("DIRECT_STRUCTURED");
     // Configure a completely non-existent executable path for idfc-coder
-    leanProps.getAgent().setExecutable("/usr/local/bin/non-existent-idfc-coder-binary-9999");
+    directProps.getAgent().setExecutable("/usr/local/bin/non-existent-idfc-coder-binary-9999");
 
-    RunbookJobService leanService = new RunbookJobService(
+    RunbookJobService directService = new RunbookJobService(
         jobs, workspace, agent, prompt, artifacts, baseline,
         schema, safety, evidence, normalizer, comparator, markdown, html,
-        supplemental, publisher, quality, mapper, leanProps,
-        collector, leanPromptBuilder, aiClient, markdownToHtml, leanValidator
+        supplemental, publisher, quality, mapper, directProps,
+        collector, leanPromptBuilder, directStructuredPromptBuilder, aiClient, markdownToHtml, leanValidator
     );
 
     String repo = temporaryGitRepository();
     String sha = git(repo);
-    var request = new CreateJobRequest("lean-missing-binary-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+    var request = new CreateJobRequest("direct-missing-binary-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
 
-    RunbookJob job = leanService.create(request);
+    RunbookJob job = directService.create(request);
     for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
 
     assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
   }
 
   @Test
-  void lean_mode_ai_failure_fails_clearly_and_does_not_fallback_to_idfc_coder() throws Exception {
+  void direct_structured_mode_ai_failure_fails_clearly_and_does_not_fallback_to_idfc_coder() throws Exception {
     AtomicInteger agentCalls = new AtomicInteger(0);
     IdfcCoderExecutor spyAgent = request -> {
       agentCalls.incrementAndGet();
@@ -188,27 +196,51 @@ class RunbookJobIntegrationTest {
       throw new IllegalStateException("RUNBOOK_AGENT_FAILED: LLM API returned HTTP 500");
     };
 
-    RunbookProperties leanProps = new RunbookProperties();
-    leanProps.getGeneration().setMode("LEAN");
+    RunbookProperties directProps = new RunbookProperties();
+    directProps.getGeneration().setMode("DIRECT_STRUCTURED");
 
-    RunbookJobService leanService = new RunbookJobService(
+    RunbookJobService directService = new RunbookJobService(
         jobs, workspace, spyAgent, prompt, artifacts, baseline,
         schema, safety, evidence, normalizer, comparator, markdown, html,
-        supplemental, publisher, quality, mapper, leanProps,
-        collector, leanPromptBuilder, failingAiClient, markdownToHtml, leanValidator
+        supplemental, publisher, quality, mapper, directProps,
+        collector, leanPromptBuilder, directStructuredPromptBuilder, failingAiClient, markdownToHtml, leanValidator
     );
 
     String repo = temporaryGitRepository();
     String sha = git(repo);
-    var request = new CreateJobRequest("lean-failing-ai-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+    var request = new CreateJobRequest("direct-failing-ai-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
 
-    RunbookJob job = leanService.create(request);
+    RunbookJob job = directService.create(request);
     for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
 
     assertThat(job.state).isEqualTo(RunbookJobState.FAILED);
     assertThat(job.failureCode).isEqualTo("RUNBOOK_AGENT_FAILED");
     // Proves there is NO silent fallback to idfc-coder
     assertThat(agentCalls.get()).isEqualTo(0);
+  }
+
+  @Test
+  void lean_mode_remains_functional_when_configured() throws Exception {
+    RunbookProperties leanProps = new RunbookProperties();
+    leanProps.getGeneration().setMode("LEAN");
+
+    RunbookJobService leanService = new RunbookJobService(
+        jobs, workspace, agent, prompt, artifacts, baseline,
+        schema, safety, evidence, normalizer, comparator, markdown, html,
+        supplemental, publisher, quality, mapper, leanProps,
+        collector, leanPromptBuilder, directStructuredPromptBuilder, aiClient, markdownToHtml, leanValidator
+    );
+
+    String repo = temporaryGitRepository();
+    String sha = git(repo);
+    var request = new CreateJobRequest("lean-configured-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+
+    RunbookJob job = leanService.create(request);
+    for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
+
+    assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
+    Path root = Path.of(job.artifacts.get("root"));
+    assertThat(root.resolve("render/RUNBOOK.md")).isRegularFile();
   }
 
   @Test
@@ -243,7 +275,7 @@ class RunbookJobIntegrationTest {
         jobs, workspace, templateCheckingAgent, prompt, artifacts, baseline,
         schema, safety, evidence, normalizer, comparator, markdown, html,
         supplemental, publisher, quality, mapper, structuredProps,
-        collector, leanPromptBuilder, aiClient, markdownToHtml, leanValidator
+        collector, leanPromptBuilder, directStructuredPromptBuilder, aiClient, markdownToHtml, leanValidator
     );
 
     String repo = temporaryGitRepository();

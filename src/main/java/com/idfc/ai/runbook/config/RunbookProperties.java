@@ -48,10 +48,12 @@ public class RunbookProperties {
   public void setTargets(Map<String, Target> v) { targets = v; }
 
   public static class Generation {
-    private String mode = "LEAN";
+    private String mode = "DIRECT_STRUCTURED";
     public String getMode() { return mode; }
     public void setMode(String v) { mode = v; }
+    public boolean isDirectStructured() { return "DIRECT_STRUCTURED".equalsIgnoreCase(mode); }
     public boolean isLean() { return "LEAN".equalsIgnoreCase(mode); }
+    public boolean isStructured() { return "STRUCTURED".equalsIgnoreCase(mode); }
   }
 
   public static class Ai {
