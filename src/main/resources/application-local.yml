@@ -1,6 +1,16 @@
 runbook:
   generation:
     mode: LEAN
+  ai:
+    base-url: ${RUNBOOK_AI_BASE_URL:}
+    auth-url: ${RUNBOOK_AI_AUTH_URL:}
+    model-name: ${RUNBOOK_AI_MODEL:gpt-4o}
+    username: ${RUNBOOK_AI_USERNAME:}
+    password: ${RUNBOOK_AI_PASSWORD:}
+    connect-timeout-seconds: ${RUNBOOK_AI_CONNECT_TIMEOUT_SECONDS:300}
+    request-timeout-seconds: ${RUNBOOK_AI_REQUEST_TIMEOUT_SECONDS:900}
+    max-tokens: ${RUNBOOK_AI_MAX_TOKENS:12000}
+    temperature: 0.0
   agent:
     type: local
   local-input:
