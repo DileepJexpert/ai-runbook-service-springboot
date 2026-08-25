@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.idfc.ai.runbook.agent.*;
 import com.idfc.ai.runbook.api.dto.*;
 import com.idfc.ai.runbook.artifact.*;
+import com.idfc.ai.runbook.client.RunbookAiClient;
+import com.idfc.ai.runbook.collector.RepositoryContextCollector;
 import com.idfc.ai.runbook.config.RunbookProperties;
 import com.idfc.ai.runbook.confluence.ConfluencePublisher;
 import com.idfc.ai.runbook.diff.*;
@@ -44,9 +46,41 @@ public class RunbookJobService {
   private final ConfluencePublisher publisher;
   private final QualityGateService quality;
   private final ObjectMapper mapper;
+  private final RunbookProperties properties;
   private final TaskExecutor executor;
 
-  public RunbookJobService(RunbookJobStore jobs, RepositoryWorkspaceProvider workspace, IdfcCoderExecutor agent, RunbookPromptBuilder prompt, RunbookArtifactStore artifacts, BaselineStore baseline, RunbookSchemaValidator schema, RunbookSafetyValidator safety, RunbookEvidenceValidator evidence, RunbookNormalizer normalizer, RunbookComparator comparator, MarkdownRunbookRenderer markdown, ConfluenceRunbookRenderer html, SupplementalArtifactRenderer supplemental, ConfluencePublisher publisher, QualityGateService quality, ObjectMapper mapper, RunbookProperties properties) {
+  // LEAN mode components
+  private final RepositoryContextCollector collector;
+  private final LeanRunbookPromptBuilder leanPromptBuilder;
+  private final RunbookAiClient aiClient;
+  private final LeanMarkdownToHtmlConverter markdownToHtml;
+  private final LeanRunbookValidator leanValidator;
+
+  public RunbookJobService(
+      RunbookJobStore jobs,
+      RepositoryWorkspaceProvider workspace,
+      IdfcCoderExecutor agent,
+      RunbookPromptBuilder prompt,
+      RunbookArtifactStore artifacts,
+      BaselineStore baseline,
+      RunbookSchemaValidator schema,
+      RunbookSafetyValidator safety,
+      RunbookEvidenceValidator evidence,
+      RunbookNormalizer normalizer,
+      RunbookComparator comparator,
+      MarkdownRunbookRenderer markdown,
+      ConfluenceRunbookRenderer html,
+      SupplementalArtifactRenderer supplemental,
+      ConfluencePublisher publisher,
+      QualityGateService quality,
+      ObjectMapper mapper,
+      RunbookProperties properties,
+      RepositoryContextCollector collector,
+      LeanRunbookPromptBuilder leanPromptBuilder,
+      RunbookAiClient aiClient,
+      LeanMarkdownToHtmlConverter markdownToHtml,
+      LeanRunbookValidator leanValidator
+  ) {
     this.jobs = jobs;
     this.workspace = workspace;
     this.agent = agent;
@@ -64,6 +98,13 @@ public class RunbookJobService {
     this.publisher = publisher;
     this.quality = quality;
     this.mapper = mapper;
+    this.properties = properties;
+    this.collector = collector;
+    this.leanPromptBuilder = leanPromptBuilder;
+    this.aiClient = aiClient;
+    this.markdownToHtml = markdownToHtml;
+    this.leanValidator = leanValidator;
+
     ThreadPoolTaskExecutor pool = new ThreadPoolTaskExecutor();
     pool.setCorePoolSize(properties.getExecutor().getCorePoolSize());
     pool.setMaxPoolSize(properties.getExecutor().getMaxPoolSize());
@@ -96,112 +137,165 @@ public class RunbookJobService {
 
   private void run(RunbookJob job) {
     try {
-      transition(job, RunbookJobState.PREPARING_WORKSPACE);
-      var checkout = workspace.prepare(job.repo, job.requestedCommit);
-      if (job.requestedCommit == null || job.requestedCommit.isBlank()) {
-        job.requestedCommit = checkout.commitSha();
+      if (properties.getGeneration().isLean() && job.extractionInput == null) {
+        runLean(job);
+      } else {
+        runStructured(job);
       }
-      Path root = artifacts.jobRoot(job.serviceId, job.id);
-      job.artifacts.put("root", root.toString());
-
-      transition(job, RunbookJobState.EXTRACTING);
-      var input = job.extractionInput;
-      Path extractionDir = root.resolve("extraction");
-      Files.createDirectories(extractionDir);
-
-      // Template-First Extraction Model:
-      // If not pregenerated files mode, write fresh canonical schema-valid templates to extraction directory
-      if (input == null || !"PREGENERATED_FILES".equalsIgnoreCase(input.mode())) {
-        artifacts.write(root, "extraction/runbook-data.json", prompt.runbookDataTemplate());
-        artifacts.write(root, "extraction/runbook-evidence.json", prompt.runbookEvidenceTemplate());
-        artifacts.write(root, "extraction/security-findings.json", prompt.securityFindingsTemplate());
-        log.info("jobId={} serviceId={} extractionTemplatesCreated=true contractVersion=2.1", job.id, job.serviceId);
-      }
-
-      var idfcRequest = new IdfcCoderRequest(
-          checkout.path(),
-          extractionDir,
-          prompt.prompt(),
-          prompt.context(),
-          input == null ? null : (input.dataPath() != null ? Path.of(input.dataPath()) : null),
-          input == null ? null : (input.evidencePath() != null ? Path.of(input.evidencePath()) : null),
-          input == null ? null : (input.securityFindingsPath() != null ? Path.of(input.securityFindingsPath()) : null),
-          checkout.mode(),
-          checkout.url(),
-          checkout.branch(),
-          checkout.commitSha()
-      );
-      var result = agent.execute(idfcRequest);
-      artifacts.write(root, "extraction/idfc-coder.stdout.log", result.stdout());
-      artifacts.write(root, "extraction/idfc-coder.stderr.log", result.stderr());
-
-      JsonNode data = mapper.readTree(artifacts.read(root, "extraction/runbook-data.json"));
-      JsonNode ev = mapper.readTree(artifacts.read(root, "extraction/runbook-evidence.json"));
-
-      String extractedCommit = data.path("pipeline").path("gitCommitSha").asText();
-      if (!extractedCommit.isBlank() && !"fixture".equalsIgnoreCase(extractedCommit) && job.requestedCommit != null && !job.requestedCommit.isBlank()) {
-        if (!extractedCommit.equalsIgnoreCase(job.requestedCommit) && !extractedCommit.startsWith(job.requestedCommit) && !job.requestedCommit.startsWith(extractedCommit)) {
-          throw new IllegalArgumentException("RUNBOOK_COMMIT_MISMATCH: extracted commit " + extractedCommit + " does not match requested " + job.requestedCommit);
-        }
-      }
-      job.analyzedCommit = !extractedCommit.isBlank() ? extractedCommit : checkout.commitSha();
-
-      transition(job, RunbookJobState.VALIDATING);
-      ValidationResult schemaResult = schema.validate(data, ev);
-      ValidationResult safetyResult = safety.validate(data);
-      ValidationResult evidenceResult = evidence.validate(ev);
-
-      List<String> errors = new ArrayList<>();
-      errors.addAll(schemaResult.errors());
-      errors.addAll(safetyResult.errors());
-      errors.addAll(evidenceResult.errors());
-
-      boolean schemaValid = schemaResult.valid() && evidenceResult.valid();
-      log.info("jobId={} serviceId={} schemaValidation={}", job.id, job.serviceId, schemaValid ? "PASS" : "FAIL");
-
-      QualityGateDecision gate = quality.evaluate(data, errors);
-      artifacts.write(root, "validation/validation-report.json", mapper.writeValueAsString(Map.of(
-          "valid", errors.isEmpty(),
-          "errors", errors,
-          "qualityGate", gate.outcome()
-      )));
-
-      if (!errors.isEmpty()) {
-        String primaryCode = !schemaResult.valid() ? "RUNBOOK_SCHEMA_INVALID" : (!safetyResult.valid() ? "SAFETY_POLICY_VIOLATION" : "RUNBOOK_SCHEMA_INVALID");
-        throw new IllegalArgumentException(primaryCode + ": " + String.join(",", errors));
-      }
-
-      transition(job, RunbookJobState.NORMALIZING);
-      JsonNode normalized = normalizer.normalize(data);
-      artifacts.write(root, "normalized/normalized-runbook-data.json", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(normalized));
-
-      transition(job, RunbookJobState.DIFFING);
-      JsonNode previous = baseline.loadLatestSuccessful(job.serviceId, job.environment).map(this::json).orElse(null);
-      OperationalDiff delta = comparator.compare(normalized, previous);
-      job.operationalChange = delta.hasOperationalChanges();
-      job.changedSections.addAll(delta.changedSections());
-      artifacts.write(root, "diff/operational-diff.json", mapper.writeValueAsString(delta));
-      artifacts.write(root, "diff/runbook-delta.json", mapper.writeValueAsString(RunbookDeltaArtifact.create(previous == null ? null : job.serviceId + ":" + job.environment, job.serviceId + ":" + job.analyzedCommit, delta)));
-
-      if (!delta.hasOperationalChanges()) {
-        renderSupplemental(root, normalized, delta);
-        report(root, job, data, gate);
-        transition(job, RunbookJobState.NO_OPERATIONAL_CHANGE);
-        return;
-      }
-
-      transition(job, RunbookJobState.RENDERING);
-      artifacts.write(root, "render/RUNBOOK.md", markdown.render(normalized));
-      artifacts.write(root, "render/confluence-body.html", html.render(normalized));
-      renderSupplemental(root, normalized, delta);
-      report(root, job, data, gate);
-      transition(job, gate.publishEligible() ? RunbookJobState.READY_TO_PUBLISH : RunbookJobState.RENDERED_PUBLISH_BLOCKED);
     } catch (Exception exception) {
       String failureCode = code(exception);
       String failureMessage = exception.getMessage() != null && !exception.getMessage().isBlank() ? exception.getMessage() : "Runbook execution failed";
       job.fail(failureCode, failureMessage);
       log.error("jobId={} serviceId={} status=FAILED failureCode={} message={}", job.id, job.serviceId, failureCode, failureMessage, exception);
     }
+  }
+
+  private void runLean(RunbookJob job) {
+    transition(job, RunbookJobState.PREPARING_WORKSPACE);
+    var checkout = workspace.prepare(job.repo, job.requestedCommit);
+    if (job.requestedCommit == null || job.requestedCommit.isBlank()) {
+      job.requestedCommit = checkout.commitSha();
+    }
+    job.analyzedCommit = checkout.commitSha();
+    Path root = artifacts.jobRoot(job.serviceId, job.id);
+    job.artifacts.put("root", root.toString());
+
+    transition(job, RunbookJobState.EXTRACTING);
+    var contextResult = collector.collect(checkout.path());
+    log.info("jobId={} serviceId={} collectedFiles={} contextChars={}",
+        job.id, job.serviceId, contextResult.filesIncluded(), contextResult.totalCharacters());
+
+    String promptText = leanPromptBuilder.buildPrompt(
+        job.serviceId,
+        checkout.mode(),
+        checkout.url(),
+        checkout.commitSha(),
+        contextResult.contextText()
+    );
+
+    log.info("jobId={} serviceId={} calling AI client for LEAN runbook generation", job.id, job.serviceId);
+    String markdownContent = aiClient.generate(promptText);
+
+    artifacts.write(root, "render/RUNBOOK.md", markdownContent);
+    String htmlContent = markdownToHtml.convertToHtml(markdownContent);
+    artifacts.write(root, "render/confluence-body.html", htmlContent);
+
+    transition(job, RunbookJobState.VALIDATING);
+    ValidationResult validationResult = leanValidator.validate(markdownContent, job.serviceId, job.analyzedCommit);
+    log.info("jobId={} serviceId={} leanValidation={}", job.id, job.serviceId, validationResult.valid() ? "PASS" : "FAIL");
+
+    if (!validationResult.valid()) {
+      String firstError = validationResult.errors().get(0);
+      String primaryCode = firstError.startsWith("RUNBOOK_") ? firstError.split("[: ]")[0]
+          : (firstError.contains("SECRET_VALUE_DETECTED") ? "SECRET_VALUE_DETECTED"
+          : (firstError.contains("SAFETY_POLICY_VIOLATION") ? "SAFETY_POLICY_VIOLATION" : "RUNBOOK_VALIDATION_FAILED"));
+      throw new IllegalArgumentException(primaryCode + ": " + String.join(", ", validationResult.errors()));
+    }
+
+    transition(job, RunbookJobState.READY_TO_PUBLISH);
+  }
+
+  private void runStructured(RunbookJob job) throws Exception {
+    transition(job, RunbookJobState.PREPARING_WORKSPACE);
+    var checkout = workspace.prepare(job.repo, job.requestedCommit);
+    if (job.requestedCommit == null || job.requestedCommit.isBlank()) {
+      job.requestedCommit = checkout.commitSha();
+    }
+    Path root = artifacts.jobRoot(job.serviceId, job.id);
+    job.artifacts.put("root", root.toString());
+
+    transition(job, RunbookJobState.EXTRACTING);
+    var input = job.extractionInput;
+    Path extractionDir = root.resolve("extraction");
+    Files.createDirectories(extractionDir);
+
+    // Template-First Extraction Model:
+    // If not pregenerated files mode, write fresh canonical schema-valid templates to extraction directory
+    if (input == null || !"PREGENERATED_FILES".equalsIgnoreCase(input.mode())) {
+      artifacts.write(root, "extraction/runbook-data.json", prompt.runbookDataTemplate());
+      artifacts.write(root, "extraction/runbook-evidence.json", prompt.runbookEvidenceTemplate());
+      artifacts.write(root, "extraction/security-findings.json", prompt.securityFindingsTemplate());
+      log.info("jobId={} serviceId={} extractionTemplatesCreated=true contractVersion=2.1", job.id, job.serviceId);
+    }
+
+    var idfcRequest = new IdfcCoderRequest(
+        checkout.path(),
+        extractionDir,
+        prompt.prompt(),
+        prompt.context(),
+        input == null ? null : (input.dataPath() != null ? Path.of(input.dataPath()) : null),
+        input == null ? null : (input.evidencePath() != null ? Path.of(input.evidencePath()) : null),
+        input == null ? null : (input.securityFindingsPath() != null ? Path.of(input.securityFindingsPath()) : null),
+        checkout.mode(),
+        checkout.url(),
+        checkout.branch(),
+        checkout.commitSha()
+    );
+    var result = agent.execute(idfcRequest);
+    artifacts.write(root, "extraction/idfc-coder.stdout.log", result.stdout());
+    artifacts.write(root, "extraction/idfc-coder.stderr.log", result.stderr());
+
+    JsonNode data = mapper.readTree(artifacts.read(root, "extraction/runbook-data.json"));
+    JsonNode ev = mapper.readTree(artifacts.read(root, "extraction/runbook-evidence.json"));
+
+    String extractedCommit = data.path("pipeline").path("gitCommitSha").asText();
+    if (!extractedCommit.isBlank() && !"fixture".equalsIgnoreCase(extractedCommit) && job.requestedCommit != null && !job.requestedCommit.isBlank()) {
+      if (!extractedCommit.equalsIgnoreCase(job.requestedCommit) && !extractedCommit.startsWith(job.requestedCommit) && !job.requestedCommit.startsWith(extractedCommit)) {
+        throw new IllegalArgumentException("RUNBOOK_COMMIT_MISMATCH: extracted commit " + extractedCommit + " does not match requested " + job.requestedCommit);
+      }
+    }
+    job.analyzedCommit = !extractedCommit.isBlank() ? extractedCommit : checkout.commitSha();
+
+    transition(job, RunbookJobState.VALIDATING);
+    ValidationResult schemaResult = schema.validate(data, ev);
+    ValidationResult safetyResult = safety.validate(data);
+    ValidationResult evidenceResult = evidence.validate(ev);
+
+    List<String> errors = new ArrayList<>();
+    errors.addAll(schemaResult.errors());
+    errors.addAll(safetyResult.errors());
+    errors.addAll(evidenceResult.errors());
+
+    boolean schemaValid = schemaResult.valid() && evidenceResult.valid();
+    log.info("jobId={} serviceId={} schemaValidation={}", job.id, job.serviceId, schemaValid ? "PASS" : "FAIL");
+
+    QualityGateDecision gate = quality.evaluate(data, errors);
+    artifacts.write(root, "validation/validation-report.json", mapper.writeValueAsString(Map.of(
+        "valid", errors.isEmpty(),
+        "errors", errors,
+        "qualityGate", gate.outcome()
+    )));
+
+    if (!errors.isEmpty()) {
+      String primaryCode = !schemaResult.valid() ? "RUNBOOK_SCHEMA_INVALID" : (!safetyResult.valid() ? "SAFETY_POLICY_VIOLATION" : "RUNBOOK_SCHEMA_INVALID");
+      throw new IllegalArgumentException(primaryCode + ": " + String.join(",", errors));
+    }
+
+    transition(job, RunbookJobState.NORMALIZING);
+    JsonNode normalized = normalizer.normalize(data);
+    artifacts.write(root, "normalized/normalized-runbook-data.json", mapper.writerWithDefaultPrettyPrinter().writeValueAsString(normalized));
+
+    transition(job, RunbookJobState.DIFFING);
+    JsonNode previous = baseline.loadLatestSuccessful(job.serviceId, job.environment).map(this::json).orElse(null);
+    OperationalDiff delta = comparator.compare(normalized, previous);
+    job.operationalChange = delta.hasOperationalChanges();
+    job.changedSections.addAll(delta.changedSections());
+    artifacts.write(root, "diff/operational-diff.json", mapper.writeValueAsString(delta));
+    artifacts.write(root, "diff/runbook-delta.json", mapper.writeValueAsString(RunbookDeltaArtifact.create(previous == null ? null : job.serviceId + ":" + job.environment, job.serviceId + ":" + job.analyzedCommit, delta)));
+
+    if (!delta.hasOperationalChanges()) {
+      renderSupplemental(root, normalized, delta);
+      report(root, job, data, gate);
+      transition(job, RunbookJobState.NO_OPERATIONAL_CHANGE);
+      return;
+    }
+
+    transition(job, RunbookJobState.RENDERING);
+    artifacts.write(root, "render/RUNBOOK.md", markdown.render(normalized));
+    artifacts.write(root, "render/confluence-body.html", html.render(normalized));
+    renderSupplemental(root, normalized, delta);
+    report(root, job, data, gate);
+    transition(job, gate.publishEligible() ? RunbookJobState.READY_TO_PUBLISH : RunbookJobState.RENDERED_PUBLISH_BLOCKED);
   }
 
   private JsonNode json(String value) {
@@ -232,7 +326,9 @@ public class RunbookJobService {
     try {
       Path root = Path.of(job.artifacts.get("root"));
       publisher.publish(job.serviceId, request.mode(), artifacts.read(root, "render/confluence-body.html"));
-      baseline.saveSuccessful(job.serviceId, job.environment, artifacts.read(root, "normalized/normalized-runbook-data.json"));
+      if (Files.exists(root.resolve("normalized/normalized-runbook-data.json"))) {
+        baseline.saveSuccessful(job.serviceId, job.environment, artifacts.read(root, "normalized/normalized-runbook-data.json"));
+      }
       transition(job, RunbookJobState.PUBLISHED);
       return job;
     } catch (Exception exception) {
@@ -256,6 +352,9 @@ public class RunbookJobService {
       return message.split("[: ]")[0];
     }
     if (message != null && message.startsWith("SAFETY_")) {
+      return message.split("[: ]")[0];
+    }
+    if (message != null && message.startsWith("SECRET_")) {
       return message.split("[: ]")[0];
     }
     return "RUNBOOK_AGENT_FAILED";

@@ -6,6 +6,22 @@ spring:
 runbook:
   enabled: true
   artifacts-root: ./build/runbook-artifacts
+  generation:
+    mode: LEAN
+  ai:
+    base-url: ${RUNBOOK_AI_BASE_URL:}
+    auth-url: ${RUNBOOK_AI_AUTH_URL:}
+    model: ${RUNBOOK_AI_MODEL:gpt-4o}
+    username: ${RUNBOOK_AI_USERNAME:}
+    password: ${RUNBOOK_AI_PASSWORD:}
+    connect-timeout-seconds: ${RUNBOOK_AI_CONNECT_TIMEOUT_SECONDS:300}
+    request-timeout-seconds: ${RUNBOOK_AI_REQUEST_TIMEOUT_SECONDS:900}
+    max-tokens: ${RUNBOOK_AI_MAX_TOKENS:12000}
+    temperature: 0.0
+  collection:
+    max-files: 120
+    max-total-characters: 300000
+    max-file-characters: 20000
   agent:
     type: local
     executable: idfc-coder

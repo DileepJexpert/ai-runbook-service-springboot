@@ -1,5 +1,7 @@
 runbook:
   artifacts-root: ./target/test-artifacts
+  generation:
+    mode: LEAN
   agent:
     type: fake
   confluence:

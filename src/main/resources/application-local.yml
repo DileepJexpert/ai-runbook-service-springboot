@@ -1,4 +1,6 @@
 runbook:
+  generation:
+    mode: LEAN
   agent:
     type: local
   local-input:

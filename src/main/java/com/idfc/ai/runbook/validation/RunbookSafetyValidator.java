@@ -20,20 +20,20 @@ public class RunbookSafetyValidator {
     }
   }
 
-  // --- Secret Rules (Applied globally to ALL textual fields in JSON) ---
+  // --- Secret Rules (Applied globally to ALL textual fields in JSON or Markdown) ---
   private static final List<Rule> SECRET_RULES = List.of(
       new Rule("NO_PRIVATE_KEY",
           Pattern.compile("(?is)-----BEGIN\\s+(?:[A-Z\\s]+)?PRIVATE\\s+KEY-----"),
-          "Private key header detected in JSON field"),
+          "Private key header detected"),
       new Rule("NO_BEARER_TOKEN",
           Pattern.compile("(?is)\\bbearer\\s+[a-z0-9._\\-]{12,}\\b"),
-          "Bearer token value detected in JSON field"),
+          "Bearer token value detected"),
       new Rule("NO_PASSWORD_ASSIGNMENT",
           Pattern.compile("(?is)\\b(?:password|passwd|pwd)\\s*[:=]\\s*[^\\s,;\"]{3,}"),
-          "Plaintext password assignment detected in JSON field"),
+          "Plaintext password assignment detected"),
       new Rule("NO_SECRET_ASSIGNMENT",
           Pattern.compile("(?is)\\b(?:api[_-]?key|client[_-]?secret|auth[_-]?token|secret[_-]?key)\\s*[:=]\\s*[^\\s,;\"]{8,}"),
-          "Secret credential assignment detected in JSON field")
+          "Secret credential assignment detected")
   );
 
   // --- Negation Pattern for Explicit Prohibitions ---
@@ -41,7 +41,7 @@ public class RunbookSafetyValidator {
       "(?is)\\b(?:do\\s+not|don't|does\\s+not|doesn't|never|must\\s+not|mustn't|should\\s+not|shouldn't|shall\\s+not|cannot|can't|prohibited|forbidden|avoid|refrain(?:\\s+from)?|no\\s+manual|without\\s+manual|not\\s+to|strictly\\s+prohibited)\\b"
   );
 
-  // --- Operational Safety Rules (Applied primarily to support-facing fields) ---
+  // --- Operational Safety Rules (Applied primarily to support-facing fields / instructions) ---
   private static final List<Rule> OPERATIONAL_SAFETY_RULES = List.of(
       new Rule("NO_MANUAL_DATABASE_MUTATION",
           Pattern.compile("(?is)\\b(?:update|delete|modify|mutate|insert|drop|truncate|alter)\\b.{0,40}\\b(?:database|db|record|table|row)s?\\b"),
@@ -56,7 +56,7 @@ public class RunbookSafetyValidator {
           Pattern.compile("(?is)\\b(?:modify|change|edit|update|override)\\b.{0,40}\\b(?:production|prod)\\b.{0,20}\\b(?:config|configuration)\\b|\\b(?:modify|change|edit|update)\\s+production\\s+config\\b"),
           "Affirmative instruction to modify production configuration"),
       new Rule("NO_MANUAL_REPROCESSING",
-          Pattern.compile("(?is)\\b(?:reprocess|re-process|retry\\s+transaction)\\b.{0,40}\\b(?:manually|payment|transaction|request)\\b|\\bmanually\\b.{0,40}\\b(?:reprocess|re-process)\\b|\\b(?:reprocess|re-process)\\s+(?:the\s+)?(?:payment|transaction|record)\s+manually\\b"),
+          Pattern.compile("(?is)\\b(?:reprocess|re-process|retry\\s+transaction)\\b.{0,40}\\b(?:manually|payment|transaction|request)\\b|\\bmanually\\b.{0,40}\\b(?:reprocess|re-process)\\b|\\b(?:reprocess|re-process)\\s+(?:the\\s+)?(?:payment|transaction|record)\\s+manually\\b"),
           "Affirmative instruction to manually reprocess transactions or payments"),
       new Rule("NO_RESTART_SCALE_INSTRUCTION",
           Pattern.compile("(?is)\\b(?:restart|scale|kill|terminate|bounce)\\b.{0,40}\\b(?:service|pod|container|app|deployment|instance|cluster)s?\\b"),
@@ -84,6 +84,58 @@ public class RunbookSafetyValidator {
 
   public ValidationResult validate(JsonNode data) {
     List<SafetyFinding> findings = inspect(data);
+    if (findings.isEmpty()) {
+      return ValidationResult.ok();
+    }
+    List<String> errors = findings.stream().map(SafetyFinding::formattedError).toList();
+    return new ValidationResult(false, errors);
+  }
+
+  public ValidationResult validateMarkdown(String markdown) {
+    if (markdown == null || markdown.isBlank()) {
+      return ValidationResult.ok();
+    }
+
+    List<SafetyFinding> findings = new ArrayList<>();
+
+    // 1. Secret Rules on Markdown
+    for (Rule rule : SECRET_RULES) {
+      if (rule.pattern().matcher(markdown).find()) {
+        findings.add(new SafetyFinding(
+            "SECRET_VALUE_DETECTED",
+            "RUNBOOK.md",
+            rule.ruleId(),
+            rule.diagnostic()
+        ));
+      }
+    }
+
+    // 2. Operational Safety on Markdown clauses
+    String[] lines = markdown.split("\\R");
+    int lineNum = 0;
+    for (String line : lines) {
+      lineNum++;
+      String[] clauses = line.split("[\\.\\;\\!\\?\\n]+|,\\s*(?:but|however|whereas|although)\\s*");
+      for (String clause : clauses) {
+        String trimmed = clause.trim();
+        if (trimmed.isEmpty()) continue;
+
+        boolean isNegated = PROHIBITION_NEGATION.matcher(trimmed).find();
+        if (!isNegated) {
+          for (Rule rule : OPERATIONAL_SAFETY_RULES) {
+            if (rule.pattern().matcher(trimmed).find()) {
+              findings.add(new SafetyFinding(
+                  "SAFETY_POLICY_VIOLATION",
+                  "RUNBOOK.md:L" + lineNum,
+                  rule.ruleId(),
+                  rule.diagnostic()
+              ));
+            }
+          }
+        }
+      }
+    }
+
     if (findings.isEmpty()) {
       return ValidationResult.ok();
     }

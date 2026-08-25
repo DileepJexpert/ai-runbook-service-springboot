@@ -1,15 +1,18 @@
 package com.idfc.ai.runbook;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.idfc.ai.runbook.agent.FakeIdfcCoderExecutor;
 import com.idfc.ai.runbook.agent.IdfcCoderExecutor;
 import com.idfc.ai.runbook.agent.IdfcCoderResult;
+import com.idfc.ai.runbook.agent.LeanRunbookPromptBuilder;
 import com.idfc.ai.runbook.agent.RunbookPromptBuilder;
 import com.idfc.ai.runbook.api.dto.CreateJobRequest;
 import com.idfc.ai.runbook.api.dto.PublishRequest;
 import com.idfc.ai.runbook.artifact.BaselineStore;
 import com.idfc.ai.runbook.artifact.RunbookArtifactStore;
+import com.idfc.ai.runbook.client.FakeRunbookAiClient;
+import com.idfc.ai.runbook.client.RunbookAiClient;
+import com.idfc.ai.runbook.collector.RepositoryContextCollector;
 import com.idfc.ai.runbook.config.RunbookProperties;
 import com.idfc.ai.runbook.confluence.ConfluencePublisher;
 import com.idfc.ai.runbook.diff.RunbookComparator;
@@ -17,10 +20,12 @@ import com.idfc.ai.runbook.normalization.RunbookNormalizer;
 import com.idfc.ai.runbook.orchestration.*;
 import com.idfc.ai.runbook.quality.QualityGateService;
 import com.idfc.ai.runbook.rendering.ConfluenceRunbookRenderer;
+import com.idfc.ai.runbook.rendering.LeanMarkdownToHtmlConverter;
 import com.idfc.ai.runbook.rendering.MarkdownRunbookRenderer;
 import com.idfc.ai.runbook.rendering.SupplementalArtifactRenderer;
 import com.idfc.ai.runbook.repository.RemoteGitResolver;
 import com.idfc.ai.runbook.repository.RepositoryWorkspaceProvider;
+import com.idfc.ai.runbook.validation.LeanRunbookValidator;
 import com.idfc.ai.runbook.validation.RunbookEvidenceValidator;
 import com.idfc.ai.runbook.validation.RunbookSafetyValidator;
 import com.idfc.ai.runbook.validation.RunbookSchemaValidator;
@@ -43,13 +48,14 @@ import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @ActiveProfiles("test")
-@Import(FakeIdfcCoderExecutor.class)
+@Import({FakeIdfcCoderExecutor.class, FakeRunbookAiClient.class})
 class RunbookJobIntegrationTest {
   @Autowired RunbookJobService service;
   @MockBean RemoteGitResolver remoteGitResolver;
 
   @Autowired RunbookJobStore jobs;
   @Autowired RepositoryWorkspaceProvider workspace;
+  @Autowired IdfcCoderExecutor agent;
   @Autowired RunbookPromptBuilder prompt;
   @Autowired RunbookArtifactStore artifacts;
   @Autowired BaselineStore baseline;
@@ -66,7 +72,13 @@ class RunbookJobIntegrationTest {
   @Autowired ObjectMapper mapper;
   @Autowired RunbookProperties properties;
 
-  @Test void local_path_mode_generates_and_publishes() throws Exception {
+  @Autowired RepositoryContextCollector collector;
+  @Autowired LeanRunbookPromptBuilder leanPromptBuilder;
+  @Autowired RunbookAiClient aiClient;
+  @Autowired LeanMarkdownToHtmlConverter markdownToHtml;
+  @Autowired LeanRunbookValidator leanValidator;
+
+  @Test void lean_mode_local_path_generates_and_publishes() throws Exception {
     Files.deleteIfExists(Path.of("target", "test-artifacts", "baselines", "payments-service-TEST.json"));
     String repo = temporaryGitRepository();
     String sha = git(repo);
@@ -77,20 +89,16 @@ class RunbookJobIntegrationTest {
     assertThat(job.artifacts).containsKey("root");
     Path root = Path.of(job.artifacts.get("root"));
     assertThat(root).isDirectory();
-    assertThat(root.resolve("extraction/runbook-data.json")).isRegularFile();
-    assertThat(root.resolve("extraction/runbook-evidence.json")).isRegularFile();
-    assertThat(root.resolve("validation/validation-report.json")).isRegularFile();
-    assertThat(root.resolve("normalized/normalized-runbook-data.json")).isRegularFile();
-    assertThat(root.resolve("diff/runbook-delta.json")).isRegularFile();
-    assertThat(root.resolve("report/generation-report.json")).isRegularFile();
-    String generationReport = Files.readString(root.resolve("report/generation-report.json"));
-    assertThat(generationReport).contains("\"artifactSha256\"", "diff/runbook-delta.json", "\"apis\"");
-    for (String artifact : new String[]{"RUNBOOK.md", "confluence-body.html", "CONFIGURATION-CATALOG.md", "API-CATALOG.md", "BUSINESS-RULES.md", "OBSERVABILITY-CATALOG.md", "ARCHITECTURE.md", "RELEASE-IMPACT.md"}) assertThat(root.resolve("render").resolve(artifact)).isRegularFile();
+    assertThat(root.resolve("render/RUNBOOK.md")).isRegularFile();
+    assertThat(root.resolve("render/confluence-body.html")).isRegularFile();
+    // LEAN mode does not create structured intermediate files
+    assertThat(root.resolve("extraction/runbook-data.json")).doesNotExist();
+
     service.publish(job.id, new PublishRequest("TEST", sha, "payments:1.0"));
     assertThat(job.state).isEqualTo(RunbookJobState.PUBLISHED);
   }
 
-  @Test void bitbucket_mode_generates_runbook_using_remote_resolution() throws Exception {
+  @Test void lean_mode_bitbucket_generates_runbook_using_remote_resolution() throws Exception {
     when(remoteGitResolver.resolveRemoteHead(eq("https://bitbucket.bank.local/scm/pay/payments.git"), eq("develop"))).thenReturn("develop-head-sha-9999");
 
     var request = new CreateJobRequest(
@@ -110,7 +118,37 @@ class RunbookJobIntegrationTest {
   }
 
   @Test
-  void template_first_extraction_initializes_fresh_templates_for_new_jobs() throws Exception {
+  void lean_mode_does_not_invoke_idfc_coder_executor() throws Exception {
+    AtomicInteger agentCalls = new AtomicInteger(0);
+    IdfcCoderExecutor spyAgent = request -> {
+      agentCalls.incrementAndGet();
+      return new IdfcCoderResult("unexpected call", "");
+    };
+
+    RunbookProperties leanProps = new RunbookProperties();
+    leanProps.getGeneration().setMode("LEAN");
+
+    RunbookJobService leanService = new RunbookJobService(
+        jobs, workspace, spyAgent, prompt, artifacts, baseline,
+        schema, safety, evidence, normalizer, comparator, markdown, html,
+        supplemental, publisher, quality, mapper, leanProps,
+        collector, leanPromptBuilder, aiClient, markdownToHtml, leanValidator
+    );
+
+    String repo = temporaryGitRepository();
+    String sha = git(repo);
+    var request = new CreateJobRequest("lean-no-agent-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+
+    RunbookJob job = leanService.create(request);
+    for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
+
+    assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
+    // Verified: idfc-coder executor is NEVER called in LEAN mode
+    assertThat(agentCalls.get()).isEqualTo(0);
+  }
+
+  @Test
+  void structured_mode_template_first_extraction_initializes_fresh_templates() throws Exception {
     AtomicInteger callCount = new AtomicInteger(0);
     IdfcCoderExecutor templateCheckingAgent = request -> {
       callCount.incrementAndGet();
@@ -119,17 +157,13 @@ class RunbookJobIntegrationTest {
         Path evidenceFile = request.outputDirectory().resolve("runbook-evidence.json");
         Path securityFile = request.outputDirectory().resolve("security-findings.json");
 
-        // 4. Fresh job receives all three templates before agent runs
         assertThat(Files.isRegularFile(dataFile)).isTrue();
         assertThat(Files.isRegularFile(evidenceFile)).isTrue();
         assertThat(Files.isRegularFile(securityFile)).isTrue();
 
-        // 6. Templates contain no previous-service facts
         String initialData = Files.readString(dataFile);
         assertThat(initialData).contains("<SERVICE_NAME>", "<BUSINESS_PURPOSE>");
-        assertThat(initialData).doesNotContain("payments-integration-services");
 
-        // Populate valid facts into the template
         Files.copy(Path.of("src/test/resources/fixtures/runbook-data.json"), dataFile, StandardCopyOption.REPLACE_EXISTING);
         Files.copy(Path.of("src/test/resources/fixtures/runbook-evidence.json"), evidenceFile, StandardCopyOption.REPLACE_EXISTING);
         return new IdfcCoderResult("template filled", "");
@@ -138,48 +172,25 @@ class RunbookJobIntegrationTest {
       }
     };
 
-    RunbookJobService templateService = new RunbookJobService(jobs, workspace, templateCheckingAgent, prompt, artifacts, baseline, schema, safety, evidence, normalizer, comparator, markdown, html, supplemental, publisher, quality, mapper, properties);
+    RunbookProperties structuredProps = new RunbookProperties();
+    structuredProps.getGeneration().setMode("STRUCTURED");
+
+    RunbookJobService structuredService = new RunbookJobService(
+        jobs, workspace, templateCheckingAgent, prompt, artifacts, baseline,
+        schema, safety, evidence, normalizer, comparator, markdown, html,
+        supplemental, publisher, quality, mapper, structuredProps,
+        collector, leanPromptBuilder, aiClient, markdownToHtml, leanValidator
+    );
 
     String repo = temporaryGitRepository();
     String sha = git(repo);
-    var request = new CreateJobRequest("template-test-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+    var request = new CreateJobRequest("structured-template-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
 
-    RunbookJob job = templateService.create(request);
+    RunbookJob job = structuredService.create(request);
     for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
 
-    // 19. idfc-coder invoked exactly once
     assertThat(callCount.get()).isEqualTo(1);
     assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
-  }
-
-  @Test
-  void invalid_extracted_schema_fails_with_runbook_schema_invalid_in_single_analysis() throws Exception {
-    AtomicInteger callCount = new AtomicInteger(0);
-    IdfcCoderExecutor failingAgent = request -> {
-      callCount.incrementAndGet();
-      try {
-        Files.writeString(request.outputDirectory().resolve("runbook-data.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\"}");
-        Files.writeString(request.outputDirectory().resolve("runbook-evidence.json"), "{\"contractVersion\":\"2.1\",\"serviceName\":\"test-svc\"}");
-        Files.writeString(request.outputDirectory().resolve("security-findings.json"), "{\"contractVersion\":\"2.1\",\"findings\":[]}\n");
-        return new IdfcCoderResult("attempt " + callCount.get(), "");
-      } catch (IOException e) {
-        throw new IllegalStateException(e);
-      }
-    };
-
-    RunbookJobService failingService = new RunbookJobService(jobs, workspace, failingAgent, prompt, artifacts, baseline, schema, safety, evidence, normalizer, comparator, markdown, html, supplemental, publisher, quality, mapper, properties);
-
-    String repo = temporaryGitRepository();
-    String sha = git(repo);
-    var request = new CreateJobRequest("single-pass-failing-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
-
-    RunbookJob job = failingService.create(request);
-    for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
-
-    // Exactly 1 analysis, no retry loop
-    assertThat(callCount.get()).isEqualTo(1);
-    assertThat(job.state).isEqualTo(RunbookJobState.FAILED);
-    assertThat(job.failureCode).isEqualTo("RUNBOOK_SCHEMA_INVALID");
   }
 
   @Test

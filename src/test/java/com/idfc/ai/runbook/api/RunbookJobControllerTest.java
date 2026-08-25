@@ -24,7 +24,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import(FakeIdfcCoderExecutor.class)
+@Import({FakeIdfcCoderExecutor.class, com.idfc.ai.runbook.client.FakeRunbookAiClient.class})
 class RunbookJobControllerTest {
 
   @Autowired private MockMvc mvc;

@@ -94,7 +94,7 @@ fi
 echo "UP"
 
 # 2. Interactive Input if required parameters are missing
-if [[ -z "$SERVICE_ID" ]]; then
+if [[ -z "$REPO_URL" && -z "$LOCAL_PATH" ]]; then
   echo ""
   echo "Select Repository Mode:"
   echo "  1) Bitbucket remote repository (Default)"
@@ -109,19 +109,42 @@ if [[ -z "$SERVICE_ID" ]]; then
   fi
 
   echo ""
-  while [[ -z "$SERVICE_ID" ]]; do
-    read -r -p "Service ID (e.g. payments-service): " SERVICE_ID
-  done
-
   if [[ "$REPO_MODE" == "BITBUCKET" ]]; then
     while [[ -z "$REPO_URL" ]]; do
       read -r -p "Bitbucket repository URL: " REPO_URL
     done
     read -r -p "Branch (optional, press Enter for remote HEAD): " REPO_BRANCH
+
+    if [[ -z "$SERVICE_ID" ]]; then
+      # Derive service ID from URL (e.g. .../payments-service.git -> payments-service)
+      CLEAN_URL="${REPO_URL%/}"
+      DERIVED_ID=$(basename "$CLEAN_URL" .git | tr -d '[:space:]')
+      read -r -p "Service ID [$DERIVED_ID]: " INPUT_ID
+      SERVICE_ID="${INPUT_ID:-$DERIVED_ID}"
+    fi
   else
     while [[ -z "$LOCAL_PATH" ]]; do
       read -r -p "Local repository path: " LOCAL_PATH
     done
+
+    if [[ -z "$SERVICE_ID" ]]; then
+      # Derive service ID from directory basename
+      CLEAN_PATH="${LOCAL_PATH%/}"
+      DERIVED_ID=$(basename "$CLEAN_PATH" | tr -d '[:space:]')
+      read -r -p "Service ID [$DERIVED_ID]: " INPUT_ID
+      SERVICE_ID="${INPUT_ID:-$DERIVED_ID}"
+    fi
+  fi
+fi
+
+# Fallback in case SERVICE_ID is still empty
+if [[ -z "$SERVICE_ID" ]]; then
+  if [[ -n "$REPO_URL" ]]; then
+    CLEAN_URL="${REPO_URL%/}"
+    SERVICE_ID=$(basename "$CLEAN_URL" .git | tr -d '[:space:]')
+  elif [[ -n "$LOCAL_PATH" ]]; then
+    CLEAN_PATH="${LOCAL_PATH%/}"
+    SERVICE_ID=$(basename "$CLEAN_PATH" | tr -d '[:space:]')
   fi
 fi
 
@@ -307,11 +330,12 @@ if status in ('READY_TO_PUBLISH', 'NO_OPERATIONAL_CHANGE', 'RENDERED_PUBLISH_BLO
     if changed_sections:
         print(f'Changed Sections:       {changed_sections}')
     print(f'Artifact Root:          {root}')
-    print('')
     print('Generated Artifacts:')
     print(f'  Markdown Runbook:     {os.path.join(root, "render", "RUNBOOK.md")}')
     print(f'  Confluence HTML:      {os.path.join(root, "render", "confluence-body.html")}')
-    print(f'  Generation Report:    {os.path.join(root, "report", "generation-report.json")}')
+    gen_report = os.path.join(root, "report", "generation-report.json")
+    if os.path.isfile(gen_report):
+        print(f'  Generation Report:    {gen_report}')
     print('============================================================')
 else:
     print('============================================================')

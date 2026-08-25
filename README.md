@@ -1,113 +1,99 @@
 # AI Runbook Service - Local Run Guide
 
-A self-contained Spring Boot service that deterministically validates, normalizes, diffs, and renders Production Support runbooks and operational catalogs from AI-extracted Service Intelligence facts.
+A self-contained Spring Boot service that generates authoritative, 23-section Production Support Runbooks for IDFC microservices using a fast, deterministic LEAN generation pipeline connected to the corporate LLM.
+
+```text
+Repository (Bitbucket / Local Path)
+  ↓
+Java Context Collection (RepositoryContextCollector)
+  ↓
+Corporate Auth & Direct LLM API (RunbookAiClient)
+  ↓
+Markdown Runbook (render/RUNBOOK.md)
+  ↓
+Lightweight Validation (23 sections, safety, secrets)
+  ↓
+Confluence HTML (render/confluence-body.html)
+  ↓
+READY_TO_PUBLISH
+```
 
 ---
 
-## 1. Quick Start for IDFC Developers (One-Command Workflow)
+## LOCAL IDFC LAPTOP SETUP
 
-Local runbook generation requires only two terminal windows:
-
-### Terminal 1: Start the AI Runbook Service
+### Step 1: Clone Repository
 ```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=local
+git clone <repo-url>
+cd ai-runbook-service-springboot
 ```
-Wait until you see the Spring Boot startup message on port `8080`.
 
-### Terminal 2: Run the Interactive Script
+### Step 2: Create Local Environment Configuration
+```bash
+cp scripts/local-env.example.sh scripts/local-env.sh
+```
+
+### Step 3: Edit `scripts/local-env.sh`
+Edit `scripts/local-env.sh` and set your corporate AI credentials:
+```bash
+export RUNBOOK_AI_BASE_URL="https://<corporate-ai-base-url>/v1/chat/completions"
+export RUNBOOK_AI_AUTH_URL="https://<corporate-auth-url>/oauth/token"
+export RUNBOOK_AI_MODEL="gpt-4o"
+export RUNBOOK_AI_USERNAME="your-username"
+export RUNBOOK_AI_PASSWORD="your-password"
+```
+
+### Step 4: Source Environment Variables
+```bash
+source scripts/local-env.sh
+```
+
+### Step 5: Start AI Runbook Service (Terminal 1)
+```bash
+./scripts/start-local.sh
+```
+*(Or run `mvn spring-boot:run -Dspring-boot.run.profiles=local`)*
+
+### Step 6: Generate Runbook (Terminal 2)
 ```bash
 ./runbook.sh
 ```
+Follow the interactive prompts:
+1. Select Repository Mode (`1` for Bitbucket, `2` for Local Path).
+2. Enter Bitbucket Repository URL (e.g. `https://bitbucket.bank.local/scm/pay/payments-service.git`).
+3. Press Enter for default branch / auto-derived Service ID.
 
-You will be prompted with simple interactive questions:
-```text
-============================================================
- IDFC AI Production Support Runbook Generator
-============================================================
-Checking AI Runbook Service health at http://localhost:8080... UP
-
-Select Repository Mode:
-  1) Bitbucket remote repository (Default)
-  2) Local directory checkout
-Choice [1]: 1
-
-Service ID (e.g. payments-service): payments-integration-services
-Bitbucket repository URL: https://bitbucket.bank.local/scm/pay/payments.git
-Branch (optional, press Enter for remote HEAD): develop
-```
-
-The script automatically:
-1. Submits the job to the Spring Boot service.
-2. Polls pipeline status transitions in real-time (`PREPARING_WORKSPACE` ➜ `EXTRACTING` ➜ `VALIDATING` ➜ `NORMALIZING` ➜ `DIFFING` ➜ `RENDERING` ➜ `READY_TO_PUBLISH`).
-3. Reports generated file paths for `RUNBOOK.md`, `confluence-body.html`, and `generation-report.json`.
-4. Prompts to open the generated Confluence HTML in your browser.
-
-> **Note:** Developers do NOT need to write raw curl requests or copy job IDs manually.
+### Expected Result:
+Generated runbook files are written to:
+- Markdown Runbook: `build/runbook-artifacts/<serviceId>/<jobId>/render/RUNBOOK.md`
+- Confluence HTML: `build/runbook-artifacts/<serviceId>/<jobId>/render/confluence-body.html`
 
 ---
 
-## 2. Prerequisites
+## CLI Options Summary (`./runbook.sh`)
 
-Ensure the following tools are installed and available on your PATH:
+For scripting, automation, or non-interactive CLI execution:
 
-- **Java**: Java 25 LTS or compatible
-- **Spring Boot**: 3.5.15
-- **Maven**: Apache Maven 3.9+
-- **Git**: Git 2.30+
-- **idfc-coder**: Local CLI extraction binary (*required only when using default `runbook.agent.type=local`*)
-
-### Verify Environment
-
-**macOS / Linux:**
 ```bash
-java -version
-mvn -version
-git --version
-idfc-coder --version
-```
-
-**Windows (PowerShell):**
-```powershell
-java -version
-mvn -version
-git --version
-idfc-coder --version
-```
-
----
-
-## 3. Non-Interactive CLI Usage (`./runbook.sh`)
-
-For scripting, automation, or direct CLI execution:
-
-### Bitbucket Remote Repository (Recommended)
-```bash
+# Bitbucket remote repository (Recommended)
 ./runbook.sh \
-  --service payments-integration-services \
-  --repo https://bitbucket.bank.local/scm/pay/payments.git \
+  --repo https://bitbucket.bank.local/scm/pay/payments-service.git \
   --branch develop
-```
 
-### Exact Commit Analysis (CI/CD / Production)
-```bash
+# Exact commit analysis
 ./runbook.sh \
-  --service payments-integration-services \
-  --repo https://bitbucket.bank.local/scm/pay/payments.git \
+  --repo https://bitbucket.bank.local/scm/pay/payments-service.git \
   --commit 6ed4594439c50e6943e5dff52fc53ac41dbc68c5
-```
 
-### Local Directory Mode
-```bash
+# Local checkout mode
 ./runbook.sh \
   --mode local \
-  --service payments-service \
   --path /Users/username/repos/payments-service
 ```
 
-### CLI Options Summary
 ```text
 Options:
-  -s, --service <id>       Service ID (e.g. payments-integration-services)
+  -s, --service <id>       Service ID (optional; auto-derived from repo URL/path if omitted)
   -r, --repo <url>         Bitbucket / Git repository URL
   -b, --branch <branch>    Branch name (optional; defaults to remote HEAD)
   -c, --commit <sha>       Exact commit SHA (optional; overrides remote HEAD)
@@ -118,182 +104,3 @@ Options:
       --no-open            Do not prompt to open generated Confluence HTML
   -h, --help               Show help message
 ```
-
----
-
-## 4. Execution Modes & Server Startup
-
-### Mode A: Local `idfc-coder` Agent (Default)
-Executes `idfc-coder` to perform AI extraction from the target repository:
-```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=local
-```
-
-### Mode B: Pre-generated Extraction Files (Offline / Test Mode)
-Loads pre-existing `runbook-data.json` and `runbook-evidence.json` without invoking the CLI agent:
-```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=local \
-  -Dspring-boot.run.arguments="--runbook.agent.type=file --runbook.local-input.allowed-roots[0]=/path/to/runbook-test-output"
-```
-
-### Run Packaged JAR
-```bash
-mvn clean package -DskipTests
-java -jar target/ai-runbook-service-1.0.0-SNAPSHOT.jar --spring.profiles.active=local
-```
-
-### Verify Server Health
-```bash
-curl http://localhost:8080/actuator/health
-# Response: {"status":"UP"}
-```
-
----
-
-## 5. Repository Analysis Modes
-
-### 1. BITBUCKET Mode (Default for IDFC Testing)
-- **Local/Manual testing**: Pass repository URL and optional branch. The service automatically resolves the current remote HEAD SHA without requiring a local git checkout.
-- **CI/CD / Production**: Supply an exact `commitSha`. The service analyzes that exact commit and verifies it against the extracted commit.
-
-### 2. LOCAL_PATH Mode
-- Analyzes a local checked-out git repository on the developer's filesystem.
-
----
-
-## 6. Where Generated Files Are Created
-
-Artifacts are written under:
-`build/runbook-artifacts/<serviceId>/<jobId>/`
-
-```text
-build/runbook-artifacts/payments-service/<jobId>/
-├── extraction/
-│   ├── runbook-data.json            # AI-extracted raw facts
-│   ├── runbook-evidence.json        # Source code line-level citations
-│   ├── security-findings.json       # Security findings (restricted)
-│   ├── idfc-coder.stdout.log        # Extraction agent stdout
-│   └── idfc-coder.stderr.log        # Extraction agent stderr
-├── validation/
-│   └── validation-report.json       # Schema, safety, and evidence validation report
-├── normalized/
-│   └── normalized-runbook-data.json # Canonicalized, sorted, deduplicated model
-├── diff/
-│   ├── operational-diff.json        # Semantic diff vs latest baseline
-│   └── runbook-delta.json           # Delta artifact
-├── render/
-│   ├── RUNBOOK.md                   # 23-section Production Support Runbook
-│   ├── confluence-body.html         # Confluence-ready XHTML storage format
-│   ├── configuration-catalog.md     # Dedicated Configuration Catalog
-│   ├── api-catalog.md               # Dedicated API Catalog
-│   ├── business-rules-catalog.md    # Dedicated Business Rules Catalog
-│   ├── observability-catalog.md     # Logs, metrics, health, trace catalog
-│   ├── architecture-document.md     # Architecture summary
-│   └── release-impact.md            # Release operational impact
-└── report/
-    └── generation-report.json       # Audit report with prompt fingerprint & quality gate
-```
-
----
-
-## 7. Advanced / Manual API Usage
-
-For developers integrating directly with the REST API:
-
-### Create Runbook Job (BITBUCKET Mode)
-```bash
-curl -X POST http://localhost:8080/api/v1/runbooks/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "serviceId": "payments-service",
-    "repository": {
-      "mode": "BITBUCKET",
-      "url": "https://bitbucket.bank.local/scm/pay/payments.git",
-      "branch": "develop"
-    },
-    "deployment": {
-      "environment": "TEST"
-    }
-  }'
-```
-
-### Create Runbook Job (LOCAL_PATH Mode)
-```bash
-curl -X POST http://localhost:8080/api/v1/runbooks/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "serviceId": "payments-service",
-    "repository": {
-      "mode": "LOCAL_PATH",
-      "localPath": "/Users/username/repos/payments-service"
-    },
-    "deployment": {
-      "environment": "TEST"
-    }
-  }'
-```
-
-### Check Job Status
-```bash
-curl http://localhost:8080/api/v1/runbooks/jobs/<JOB_UUID>
-```
-
-### Publish to Confluence (Deployment Pipeline)
-```bash
-curl -X POST http://localhost:8080/api/v1/runbooks/jobs/<JOB_UUID>/publish \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mode": "TEST",
-    "deployedCommitSha": "6ed4594439c50e6943e5dff52fc53ac41dbc68c5",
-    "deployedImageTag": "payments-service:1.0.0"
-  }'
-```
-
----
-
-## 8. Troubleshooting & Error Codes
-
-| Error Code / Message | Root Cause | How to Fix |
-|---|---|---|
-| `RUNBOOK_AGENT_FAILED` | `idfc-coder` binary failed or returned non-zero exit code. | Inspect `extraction/idfc-coder.stderr.log` in the artifact folder. Verify `idfc-coder` is on PATH. |
-| `RUNBOOK_AGENT_TIMEOUT` | AI extraction exceeded execution timeout. | Increase timeout in `application.yml` via `runbook.agent.timeout` (default is `30m`). |
-| `RUNBOOK_EXTRACTION_MISSING` | Extraction finished but `runbook-data.json` or `runbook-evidence.json` was not created. | Verify `idfc-coder` write permissions in the artifact output directory. |
-| `RUNBOOK_FILE_AGENT_INVALID` | `dataPath` or `evidencePath` is outside allowed roots. | Add the parent directory of your test files to `runbook.local-input.allowed-roots` in `application-local.yml`. |
-| `RUNBOOK_BRANCH_NOT_FOUND` | Specified branch does not exist on remote repository. | Verify branch name on Bitbucket. |
-| `RUNBOOK_COMMIT_MISMATCH` | Extracted commit does not match requested/resolved commit. | Ensure extraction agent analyzes the specified commit SHA. |
-| `RUNBOOK_SCHEMA_INVALID` | Generated JSON failed contract validation. | Inspect `validation/validation-report.json` for specific field errors. |
-| `SAFETY_POLICY_VIOLATION` | Extraction generated unsafe Production Support instructions (e.g. database updates, event replays). | Ensure extraction prompt v3 is used and support guidance is strictly read-only. |
-| `RUNBOOK_DEPLOYED_COMMIT_MISMATCH` | Publish request commit SHA does not match analyzed commit. | Pass the exact analyzed commit SHA in `deployedCommitSha`. |
-
----
-
-## 9. Feature Support Status
-
-| Feature | Status | Notes |
-|---|---|---|
-| Bundled 2.1 Specification (`runbook-spec`) | **IMPLEMENTED** | Bundled on classpath; zero external dependencies. |
-| One-Command Interactive Run (`runbook.sh`) | **IMPLEMENTED** | Interactive & CLI flags on macOS/Linux. |
-| Bitbucket Remote HEAD Resolution | **IMPLEMENTED** | Uses `git ls-remote` for automatic branch resolution. |
-| Local Directory Analysis (`LOCAL_PATH`) | **IMPLEMENTED** | Supported via CLI & API. |
-| Pre-generated File Extraction Mode | **IMPLEMENTED** | Local profile only (`runbook.agent.type=file`). |
-| Safety & Read-Only Policy Validation | **IMPLEMENTED** | Rejects affirmative mutation instructions. |
-| 23-Section Support Markdown & HTML Rendering | **IMPLEMENTED** | Frozen headings, deterministic formatting. |
-| Semantic Diffing & Baseline Comparison | **IMPLEMENTED** | In-memory & local filesystem baseline store. |
-| Direct Confluence REST API Client | **NOT YET IMPLEMENTED** | Publisher interface is ready; currently uses local mock registry. |
-| Persistent Database Job Store | **NOT YET IMPLEMENTED** | Uses thread-safe in-memory store (`InMemoryRunbookJobStore`). |
-
----
-
-## 10. Template-First Extraction & Future Maintenance
-
-The AI Runbook Service uses a **template-first extraction model**:
-- Java creates canonical, schema-valid extraction templates (`runbook-data.template.json`, `runbook-evidence.template.json`, `security-findings.template.json`) in the job's `extraction/` directory before `idfc-coder` runs.
-- `idfc-coder` analyzes the repository fresh from scratch and populates these existing files in place.
-- Java enforces strict JSON schema validation in a single pass.
-
-### Maintenance Workflow for Schema/Contract Changes:
-Whenever the Service Intelligence contract or schema changes:
-1. **Update schemas** in `src/main/resources/runbook-spec/schema/`.
-2. **Update canonical templates** in `src/main/resources/runbook-spec/templates/`.
-3. **Run tests** (`mvn test`) — automated tests will verify that templates validate 100% against schemas.
-4. **Update extraction prompt** in `src/main/resources/runbook-spec/prompt/json-extractor-prompt-v3.txt` if new mandatory fields are introduced.
