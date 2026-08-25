@@ -78,6 +78,11 @@ class RunbookJobIntegrationTest {
   @Autowired LeanMarkdownToHtmlConverter markdownToHtml;
   @Autowired LeanRunbookValidator leanValidator;
 
+  @Test void default_mode_is_lean_in_properties() {
+    assertThat(properties.getGeneration().getMode()).isEqualTo("LEAN");
+    assertThat(properties.getGeneration().isLean()).isTrue();
+  }
+
   @Test void lean_mode_local_path_generates_and_publishes() throws Exception {
     Files.deleteIfExists(Path.of("target", "test-artifacts", "baselines", "payments-service-TEST.json"));
     String repo = temporaryGitRepository();
@@ -144,6 +149,65 @@ class RunbookJobIntegrationTest {
 
     assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
     // Verified: idfc-coder executor is NEVER called in LEAN mode
+    assertThat(agentCalls.get()).isEqualTo(0);
+  }
+
+  @Test
+  void missing_idfc_coder_binary_does_not_affect_lean_mode() throws Exception {
+    RunbookProperties leanProps = new RunbookProperties();
+    leanProps.getGeneration().setMode("LEAN");
+    // Configure a completely non-existent executable path for idfc-coder
+    leanProps.getAgent().setExecutable("/usr/local/bin/non-existent-idfc-coder-binary-9999");
+
+    RunbookJobService leanService = new RunbookJobService(
+        jobs, workspace, agent, prompt, artifacts, baseline,
+        schema, safety, evidence, normalizer, comparator, markdown, html,
+        supplemental, publisher, quality, mapper, leanProps,
+        collector, leanPromptBuilder, aiClient, markdownToHtml, leanValidator
+    );
+
+    String repo = temporaryGitRepository();
+    String sha = git(repo);
+    var request = new CreateJobRequest("lean-missing-binary-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+
+    RunbookJob job = leanService.create(request);
+    for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
+
+    assertThat(job.state).isEqualTo(RunbookJobState.READY_TO_PUBLISH);
+  }
+
+  @Test
+  void lean_mode_ai_failure_fails_clearly_and_does_not_fallback_to_idfc_coder() throws Exception {
+    AtomicInteger agentCalls = new AtomicInteger(0);
+    IdfcCoderExecutor spyAgent = request -> {
+      agentCalls.incrementAndGet();
+      return new IdfcCoderResult("fallback call", "");
+    };
+
+    RunbookAiClient failingAiClient = promptText -> {
+      throw new IllegalStateException("RUNBOOK_AGENT_FAILED: LLM API returned HTTP 500");
+    };
+
+    RunbookProperties leanProps = new RunbookProperties();
+    leanProps.getGeneration().setMode("LEAN");
+
+    RunbookJobService leanService = new RunbookJobService(
+        jobs, workspace, spyAgent, prompt, artifacts, baseline,
+        schema, safety, evidence, normalizer, comparator, markdown, html,
+        supplemental, publisher, quality, mapper, leanProps,
+        collector, leanPromptBuilder, failingAiClient, markdownToHtml, leanValidator
+    );
+
+    String repo = temporaryGitRepository();
+    String sha = git(repo);
+    var request = new CreateJobRequest("lean-failing-ai-service", new CreateJobRequest.Repository("LOCAL_PATH", repo, sha), new CreateJobRequest.Deployment("TEST"));
+
+    RunbookJob job = leanService.create(request);
+    for (int i = 0; i < 400 && job.state != RunbookJobState.READY_TO_PUBLISH && job.state != RunbookJobState.FAILED; i++) Thread.sleep(25);
+
+    assertThat(job.state).isEqualTo(RunbookJobState.FAILED);
+    assertThat(job.failureCode).isEqualTo("RUNBOOK_AGENT_FAILED");
+    // Proves there is NO silent fallback to idfc-coder
     assertThat(agentCalls.get()).isEqualTo(0);
   }
 

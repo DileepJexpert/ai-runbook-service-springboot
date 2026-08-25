@@ -18,6 +18,11 @@ Confluence HTML (render/confluence-body.html)
 READY_TO_PUBLISH
 ```
 
+### LOCAL / TEST AI EXECUTION
+
+The runbook application calls the corporate LLM HTTP API directly.
+`idfc-coder` is not required and is not invoked by LEAN mode.
+
 ---
 
 ## LOCAL IDFC LAPTOP SETUP
